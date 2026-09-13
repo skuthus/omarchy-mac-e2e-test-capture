@@ -2,7 +2,7 @@
 # Pull sysinfo from GitHub on a remote host and store the report locally.
 set -euo pipefail
 
-PINNED_URL="${SYSINFO_URL:-https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo}"
+PINNED_URL="${SYSINFO_URL:-https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo}"
 
 usage() {
   echo "Usage: sysinfo-remote user@host [outfile]"

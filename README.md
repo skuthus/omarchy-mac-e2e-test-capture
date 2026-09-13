@@ -1,22 +1,22 @@
-# sysinfo
+# omarchy-mac-e2e-test-capture
 
-Collectors for Arch / Asahi / Omarchy Mac test machines.
+Evidence collector for Omarchy Mac volunteer E2E installs, plus a small host snapshot helper.
 
 ## Omarchy Mac E2E evidence (`omarchy-mac-e2e-capture`)
 
 Records the command output the [volunteer E2E checklist](https://github.com/omacom/omarchy-mac) asks for. Run it at each stage (and after every reboot). Writes a timestamped directory plus `COMBINED.txt`. Serial numbers and password/token-looking fields are redacted.
 
-Pinned URL (v1.1.0):
+Pinned URL (v1.1.1):
 
 ```
-https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.1.0/omarchy-mac-e2e-capture
+https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture
 ```
 
 On the Asahi box, after login / after each reboot (use tty2 if tty1 is the guided setup):
 
 ```bash
 curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.1.0/omarchy-mac-e2e-capture \
+  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
   | bash -s -- auto --tester YOU --test-id ISSUE
 ```
 
@@ -37,7 +37,7 @@ If the install fails:
 
 ```bash
 curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.1.0/omarchy-mac-e2e-capture \
+  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
   | bash -s -- fail --tester YOU --test-id ISSUE
 ```
 
@@ -45,7 +45,7 @@ From macOS:
 
 ```bash
 curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.1.0/omarchy-mac-e2e-capture \
+  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
   | bash -s -- macos --tester YOU --test-id ISSUE
 ```
 
@@ -62,7 +62,7 @@ Does not call `hostname` (often missing on a minimal Arch install). Uses `uname 
 Pinned URL (v1.0.1):
 
 ```
-https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo
+https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo
 ```
 
 ## Run on the Arch box (curl only)
@@ -71,7 +71,7 @@ If local DNS cannot resolve GitHub/jsDelivr hostnames, use DNS-over-HTTPS agains
 
 ```bash
 curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash
+  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo | bash
 ```
 
 That writes `~/sysinfo-<host>-<timestamp>.txt` and prints the same report.
@@ -80,7 +80,7 @@ Custom path:
 
 ```bash
 curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo \
+  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo \
   | bash -s -- --out /tmp/report.txt
 ```
 
@@ -88,13 +88,13 @@ Skip DNS entirely and pin Cloudflare’s IP:
 
 ```bash
 curl -fsSL --resolve cdn.jsdelivr.net:443:104.17.208.5 \
-  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash
+  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo | bash
 ```
 
 Working local DNS:
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash
+curl -fsSL https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo | bash
 ```
 
 ## Run on a remote, store the output here
@@ -103,7 +103,7 @@ The remote also keeps its own copy under `$HOME`.
 
 ```bash
 ssh you@remote-host \
-  'curl -fsSL --doh-url https://1.1.1.1/dns-query https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash' \
+  'curl -fsSL --doh-url https://1.1.1.1/dns-query https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.0.1/sysinfo | bash' \
   | tee ~/sysinfo-remote-$(date +%Y%m%d-%H%M%S).txt
 ```
 
