@@ -1,0 +1,524 @@
+#!/usr/bin/env bash
+# Capture the evidence the Omarchy Mac volunteer E2E checklist asks for.
+# Safe to run via: curl -fsSL <url> | bash -s -- <phase>
+#
+# Phases match the checklist:
+#   macos         section 2  (run from macOS)
+#   asahi         section 3  fresh Asahi baseline
+#   start         section 4  guided installer state
+#   desktop       section 6  first desktop login
+#   persistence   section 7  second login / reboot / cleanup
+#   fail          section 8  do this BEFORE any repair
+#   auto          everything that applies on this OS right now
+#   wrap          record this tty (last lines before a reboot)
+set -u
+
+usage() {
+  cat <<'EOF'
+Usage: omarchy-mac-e2e-capture <phase> [options]
+
+Phases:
+  macos          Checklist §2 — macOS hardware / diskutil (run in macOS)
+  asahi          Checklist §3 — fresh Asahi baseline
+  start          Checklist §4 — installer command, repo/ref, setup status
+  desktop        Checklist §6 — installed-system state after first login
+  persistence    Checklist §7 — cleanup, failed units, warning journals
+  fail           Checklist §8 — failure evidence; run before any repair
+  auto           Run every phase that applies on this machine
+  wrap           Record this terminal until you exit (pre-reboot lines)
+
+Options:
+  -o, --out DIR      Evidence directory (default: ~/omarchy-mac-e2e/<stamp>)
+  --tester NAME      Written into META and the report template
+  --test-id ID       Tracking issue / test ID
+  --command TEXT     Exact installer command you ran or will run
+  --repo OWNER/REPO  Recorded Omarchy repo
+  --ref REF          Recorded branch / tag / commit
+  -h, --help
+
+Environment: E2E_OUT, E2E_TESTER, E2E_TEST_ID, E2E_COMMAND, E2E_REPO, E2E_REF
+
+Typical Asahi run, after each boot, on tty2 if tty1 is the installer:
+
+  curl -fsSL --doh-url https://1.1.1.1/dns-query \
+    https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.1.0/omarchy-mac-e2e-capture \
+    | bash -s -- auto --tester YOU --test-id ISSUE
+
+On failure, before touching storage or re-running setup:
+
+  ... | bash -s -- fail --tester YOU --test-id ISSUE
+EOF
+}
+
+phase="${1:-}"
+if [[ -n "$phase" ]]; then
+  shift
+fi
+
+outdir=""
+tester="${E2E_TESTER:-}"
+test_id="${E2E_TEST_ID:-}"
+install_command="${E2E_COMMAND:-}"
+repo="${E2E_REPO:-}"
+ref="${E2E_REF:-}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--out)
+      [[ $# -ge 2 ]] || { echo "e2e-capture: --out requires a directory" >&2; exit 2; }
+      outdir="$2"
+      shift 2
+      ;;
+    --tester)
+      tester="$2"; shift 2
+      ;;
+    --test-id)
+      test_id="$2"; shift 2
+      ;;
+    --command)
+      install_command="$2"; shift 2
+      ;;
+    --repo)
+      repo="$2"; shift 2
+      ;;
+    --ref)
+      ref="$2"; shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "e2e-capture: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$phase" in
+  ""|-h|--help)
+    usage
+    exit 0
+    ;;
+  macos|asahi|start|pre|desktop|persistence|fail|auto|wrap) ;;
+  *)
+    echo "e2e-capture: unknown phase: $phase" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+[[ "$phase" == pre ]] && phase=start
+
+os="$(uname -s 2>/dev/null || echo unknown)"
+node="$(uname -n 2>/dev/null || true)"
+if [[ -z "$node" && -r /etc/hostname ]]; then
+  node="$(tr -d ' \t\r\n' </etc/hostname)"
+fi
+node="${node%%.*}"
+node="${node//[^A-Za-z0-9._-]/_}"
+node="${node:-unknown}"
+stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+
+if [[ -z "$outdir" ]]; then
+  if [[ -n "${E2E_OUT:-}" ]]; then
+    outdir="$E2E_OUT"
+  elif [[ -n "${HOME:-}" && -w "${HOME}" ]]; then
+    outdir="$HOME/omarchy-mac-e2e/${stamp}-${phase}"
+  else
+    outdir="/tmp/omarchy-mac-e2e/${stamp}-${phase}"
+  fi
+fi
+mkdir -p "$outdir"
+
+redact_stream() {
+  sed -E \
+    -e 's/(Serial Number[^:]*:)[[:space:]]*.*/\1 [REDACTED]/gI' \
+    -e 's/(IOPlatformSerialNumber[[:space:]]*:)[[:space:]]*.*/\1 [REDACTED]/gI' \
+    -e 's/(Provisioning UDID:)[[:space:]]*.*/\1 [REDACTED]/gI' \
+    -e 's/([Pp]assword|[Tt]oken|[Ss]ecret|api[_-]?key)[=:][[:space:]]*[^[:space:]]+/\1=[REDACTED]/g'
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+owner_user() {
+  local u=""
+  if [[ -r /etc/omarchy-mac-setup.conf ]]; then
+    u="$(bash -c '. /etc/omarchy-mac-setup.conf >/dev/null 2>&1; printf %s "${SETUP_USER:-}"')"
+  fi
+  if [[ -z "$u" ]]; then
+    u="$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $2; exit}')"
+  fi
+  if [[ -z "$u" ]]; then
+    u="$(getent passwd | awk -F: '$3 >= 1000 && $1 != "nobody" && $1 != "alarm" {print $1; exit}')"
+  fi
+  printf '%s' "$u"
+}
+
+as_owner() {
+  local user="$1"
+  shift
+  if [[ -z "$user" ]]; then
+    "$@"
+    return
+  fi
+  if [[ "$(id -un 2>/dev/null || true)" == "$user" ]]; then
+    "$@"
+    return
+  fi
+  if [[ "${EUID:-1}" -eq 0 ]] && id -u "$user" >/dev/null 2>&1; then
+    local uid xdg
+    uid="$(id -u "$user")"
+    xdg="/run/user/${uid}"
+    local -a env_prefix=()
+    if [[ -d "$xdg" ]]; then
+      env_prefix=(env "XDG_RUNTIME_DIR=$xdg" "DBUS_SESSION_BUS_ADDRESS=unix:path=${xdg}/bus")
+    fi
+    if have runuser; then
+      runuser -u "$user" -- "${env_prefix[@]}" "$@"
+    elif have sudo; then
+      sudo -u "$user" "${env_prefix[@]}" "$@"
+    else
+      "$@"
+    fi
+    return
+  fi
+  "$@"
+}
+
+capture() {
+  local dest="$1"
+  shift
+  mkdir -p "$(dirname "$dest")"
+  local rc=0 raw="${dest}.raw" shell=0
+  local -a cmd=("$@")
+  if [[ "${1:-}" == -c ]]; then
+    shell=1
+    shift
+    cmd=("bash" "-c" "$*")
+  fi
+  {
+    printf '+ %s\n' "${cmd[*]}"
+    printf 'time=%s user=%s euid=%s\n' \
+      "$(date -Is 2>/dev/null || date)" \
+      "$(id -un 2>/dev/null || echo unknown)" \
+      "${EUID:-}"
+    echo '-----'
+    if [[ "$shell" -eq 1 ]]; then
+      bash -c "$*" || rc=$?
+    else
+      "${cmd[@]}" || rc=$?
+    fi
+    echo '-----'
+    echo "exit=$rc"
+  } >"$raw" 2>&1
+  redact_stream <"$raw" >"$dest"
+  rm -f "$raw"
+  printf '  %s  exit=%s\n' "${dest#"$outdir"/}" "$rc"
+}
+
+copy_tail() {
+  local src="$1" dest="$2" lines="${3:-200}"
+  mkdir -p "$(dirname "$dest")"
+  {
+    echo "+ tail -n $lines $src"
+    if [[ -r "$src" ]]; then
+      tail -n "$lines" "$src"
+      echo "-----"
+      echo "exit=0"
+    else
+      echo "(missing $src)"
+      echo "-----"
+      echo "exit=1"
+    fi
+  } 2>&1 | redact_stream >"$dest"
+  printf '  %s\n' "${dest#"$outdir"/}"
+}
+
+write_meta() {
+  local dest="$outdir/00-meta.txt"
+  {
+    echo "phase=$phase"
+    echo "captured_at=$(date -Is 2>/dev/null || date)"
+    echo "timezone=$(date '+%Z %z' 2>/dev/null || true)"
+    echo "tester=${tester:-}"
+    echo "test_id=${test_id:-}"
+    echo "install_command=${install_command:-}"
+    echo "repo=${repo:-}"
+    echo "ref=${ref:-}"
+    echo "uname=$(uname -a 2>/dev/null || true)"
+    echo "os=$os"
+    echo "node=$node"
+    if [[ -r /etc/os-release ]]; then
+      echo "----- /etc/os-release -----"
+      cat /etc/os-release
+    fi
+    if [[ -r /proc/device-tree/model ]]; then
+      echo "device_tree_model=$(tr -d '\0' </proc/device-tree/model)"
+    fi
+    if [[ -r /proc/device-tree/compatible ]]; then
+      echo "device_tree_compatible=$(tr '\0' ' ' </proc/device-tree/compatible)"
+    fi
+    echo "euid=${EUID:-} user=$(id -un 2>/dev/null || true)"
+    echo "outdir=$outdir"
+  } 2>&1 | redact_stream >"$dest"
+}
+
+write_report_template() {
+  local dest="$outdir/01-report-template.txt"
+  local version="" path="" commit=""
+  have omarchy && version="$(omarchy version 2>/dev/null || true)"
+  [[ -n "${OMARCHY_PATH:-}" ]] && path="$OMARCHY_PATH"
+  if [[ -z "$path" && -e /usr/share/omarchy ]]; then
+    path="$(readlink -f /usr/share/omarchy 2>/dev/null || echo /usr/share/omarchy)"
+  fi
+  if [[ -d "${path:-}/.git" ]]; then
+    commit="$(git -C "$path" rev-parse --short HEAD 2>/dev/null || true)"
+  elif [[ -d "$HOME/.local/share/omarchy/.git" ]]; then
+    commit="$(git -C "$HOME/.local/share/omarchy" rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  cat >"$dest" <<EOF
+Test ID: ${test_id:-}
+Tester: ${tester:-}
+Date/timezone: $(date -Is 2>/dev/null || date) $(date +%Z 2>/dev/null || true)
+Mac model / Apple identifier / SoC / RAM:
+$(if [[ -r /proc/device-tree/model ]]; then tr -d '\0' </proc/device-tree/model; echo; fi)
+$(if [[ -r /proc/device-tree/compatible ]]; then tr '\0' ' ' </proc/device-tree/compatible; echo; fi)
+macOS version:
+Asahi image and filesystem:
+Encryption and keymap:
+Omarchy repo / ref / installed version: ${repo:-} ${ref:-} ${version} ${commit}
+Test command: ${install_command:-}
+
+Fresh Asahi baseline: PASS / FAIL
+Boot-layout stage: PASS / FAIL / SKIP
+Encryption stage: PASS / FAIL / SKIP
+Omarchy install stage: PASS / FAIL
+First login: PASS / FAIL
+Second login: PASS / FAIL
+Normal reboot: PASS / FAIL
+Cold boot: PASS / FAIL
+Hardware smoke test: PASS / FAIL / SKIP
+Security cleanup: PASS / FAIL
+
+Overall: PASS / FAIL / BLOCKED
+First failing checkpoint:
+Expected:
+Actual:
+Reproduction steps:
+Warnings / skipped packages:
+Logs, photos, or video: $outdir
+Related issue/PR: ${test_id:-}
+Notes and clearly labelled hypotheses:
+
+Evidence directory: $outdir
+Attach COMBINED.txt plus this directory. Redact any remaining serials/passwords before publishing.
+EOF
+}
+
+phase_macos() {
+  local d="$outdir/02-macos"
+  mkdir -p "$d"
+  echo "== checklist §2 macos =="
+  if [[ "$os" != Darwin ]]; then
+    echo "skip: this phase is for macOS (uname=$os)" | tee "$d/SKIP.txt"
+    return 0
+  fi
+  capture "$d/system_profiler-SPHardwareDataType.txt" system_profiler SPHardwareDataType
+  capture "$d/sw_vers.txt" sw_vers
+  capture "$d/diskutil-list.txt" diskutil list
+}
+
+phase_asahi() {
+  local d="$outdir/03-asahi"
+  mkdir -p "$d"
+  echo "== checklist §3 asahi baseline =="
+  capture "$d/uname-a.txt" uname -a
+  capture "$d/os-release.txt" -c 'cat /etc/os-release'
+  capture "$d/findmnt-root.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /
+  capture "$d/findmnt-boot.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /boot
+  capture "$d/lsblk-f.txt" lsblk -f
+  capture "$d/df-h-root-boot.txt" df -h / /boot
+  capture "$d/free-h.txt" free -h
+  capture "$d/timedatectl.txt" timedatectl
+  capture "$d/localectl.txt" localectl status
+  capture "$d/vconsole.txt" -c 'cat /etc/vconsole.conf 2>/dev/null || true'
+  capture "$d/ip-route.txt" ip route
+  capture "$d/freshness.txt" -c '
+    echo "omarchy_share=$(test -e /usr/share/omarchy; echo $?)"
+    echo "setup_conf=$(test -e /etc/omarchy-mac-setup.conf; echo $?)"
+    echo "setup_unit=$(test -e /etc/systemd/system/omarchy-mac-setup.service; echo $?)"
+    echo "installed_marker=$(test -e /var/lib/omarchy-mac-setup/installed; echo $?)"
+    echo "display_manager=$(test -L /etc/systemd/system/display-manager.service; echo $?)"
+  '
+}
+
+phase_start() {
+  local d="$outdir/04-start"
+  mkdir -p "$d"
+  echo "== checklist §4 guided installer =="
+  {
+    echo "recorded_command=${install_command:-}"
+    echo "recorded_repo=${repo:-}"
+    echo "recorded_ref=${ref:-}"
+    echo "start_time=$(date -Is 2>/dev/null || date)"
+  } >"$d/invocation.txt"
+  if have omarchy-mac-setup; then
+    capture "$d/omarchy-mac-setup-status.txt" omarchy-mac-setup --status
+  elif [[ -x /usr/local/bin/omarchy-mac-setup ]]; then
+    capture "$d/omarchy-mac-setup-status.txt" /usr/local/bin/omarchy-mac-setup --status
+  else
+    echo "omarchy-mac-setup not on PATH yet" >"$d/omarchy-mac-setup-status.txt"
+  fi
+  capture "$d/setup-conf.txt" -c 'cat /etc/omarchy-mac-setup.conf 2>/dev/null || echo missing'
+  capture "$d/systemctl-setup.txt" systemctl status omarchy-mac-setup.service --no-pager
+  copy_tail /var/log/omarchy-mac-setup.log "$d/omarchy-mac-setup.log-tail.txt" 200
+  capture "$d/findmnt-root.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /
+  capture "$d/findmnt-boot.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /boot
+  capture "$d/lsblk-f.txt" lsblk -f
+}
+
+phase_desktop() {
+  local d="$outdir/06-desktop"
+  local user migrate_rc=0
+  user="$(owner_user)"
+  mkdir -p "$d"
+  echo "== checklist §6 first desktop login =="
+  capture "$d/omarchy-version.txt" omarchy version
+  capture "$d/OMARCHY_PATH.txt" -c 'printf "%s\n" "${OMARCHY_PATH:-}"'
+  capture "$d/usr-share-omarchy.txt" readlink -f /usr/share/omarchy
+  capture "$d/pacman-Q-core.txt" pacman -Q omarchy omarchy-settings hyprland hyprtoolkit hyprland-guiutils aquamarine
+  capture "$d/pacman-Dk.txt" pacman -Dk
+  capture "$d/systemctl-failed.txt" systemctl --failed --no-pager
+  capture "$d/systemctl-user-failed.txt" as_owner "$user" systemctl --user --failed --no-pager
+  {
+    echo "+ omarchy-migrate --pending"
+    echo "NOTE: exit 0 means migrations are pending; exit 1 means none are pending."
+    echo "-----"
+    migrate_rc=0
+    omarchy-migrate --pending || migrate_rc=$?
+    echo "-----"
+    echo "exit=$migrate_rc"
+  } >"$d/omarchy-migrate-pending.raw" 2>&1
+  redact_stream <"$d/omarchy-migrate-pending.raw" >"$d/omarchy-migrate-pending.txt"
+  rm -f "$d/omarchy-migrate-pending.raw"
+  printf '  %s  exit=%s\n' "06-desktop/omarchy-migrate-pending.txt" "$migrate_rc"
+  capture "$d/omarchy-done-finalize-user.txt" omarchy-done check finalize-user
+  capture "$d/omarchy-done-first-run-user.txt" omarchy-done check first-run-user
+  capture "$d/swapon.txt" swapon --show
+  capture "$d/findmnt-root.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /
+  capture "$d/findmnt-boot.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /boot
+  if [[ -n "$user" && -d "/home/$user/.local/share/omarchy/.git" ]]; then
+    capture "$d/omarchy-git-head.txt" git -C "/home/$user/.local/share/omarchy" rev-parse HEAD
+    capture "$d/omarchy-git-status.txt" git -C "/home/$user/.local/share/omarchy" status -sb
+    capture "$d/omarchy-git-remote.txt" git -C "/home/$user/.local/share/omarchy" remote -v
+  fi
+}
+
+phase_persistence() {
+  local d="$outdir/07-persistence"
+  local user
+  user="$(owner_user)"
+  mkdir -p "$d"
+  echo "== checklist §7 persistence and security =="
+  echo "NOTE: test exit 1 is expected after cleanup (temporary files should be absent)." >"$d/README.txt"
+  capture "$d/setup-service-enabled.txt" systemctl is-enabled omarchy-mac-setup.service
+  capture "$d/setup-conf-exists.txt" -c 'test -e /etc/omarchy-mac-setup.conf; echo "setup_conf=$?"'
+  capture "$d/setup-sudoers-exists.txt" -c 'test -e /etc/sudoers.d/01-omarchy-mac-setup; echo "setup_sudoers=$?"'
+  capture "$d/systemctl-failed.txt" systemctl --failed --no-pager
+  capture "$d/systemctl-user-failed.txt" as_owner "$user" systemctl --user --failed --no-pager
+  capture "$d/journalctl-b-warning.txt" journalctl -b -p warning --no-pager
+  capture "$d/journalctl-user-b-warning.txt" as_owner "$user" journalctl --user -b -p warning --no-pager
+  capture "$d/not-found-units.txt" -c 'systemctl list-units --all --no-pager --state=not-found'
+  capture "$d/ufw-status.txt" ufw status verbose
+  capture "$d/sshd-enabled.txt" systemctl is-enabled sshd
+  capture "$d/root-passwd-status.txt" passwd -S root
+}
+
+phase_fail() {
+  local d="$outdir/08-fail"
+  mkdir -p "$d"
+  echo "== checklist §8 failure evidence =="
+  echo "Collect this before rerunning the installer, repairing, or wiping." | tee "$d/README.txt"
+  if [[ -x /usr/local/bin/omarchy-mac-setup ]]; then
+    capture "$d/omarchy-mac-setup-status.txt" /usr/local/bin/omarchy-mac-setup --status
+  else
+    capture "$d/omarchy-mac-setup-status.txt" omarchy-mac-setup --status
+  fi
+  capture "$d/systemctl-setup.txt" systemctl status omarchy-mac-setup.service --no-pager
+  capture "$d/journalctl-list-boots.txt" journalctl --list-boots
+  echo "NOTE: current-boot journal is the full journalctl -b; it can be large." >"$d/journal-NOTE.txt"
+  capture "$d/journalctl-current-boot.txt" journalctl -b --no-pager
+  capture "$d/findmnt.txt" findmnt
+  capture "$d/lsblk-f.txt" lsblk -f
+  capture "$d/df-h-root-boot.txt" df -h / /boot
+  copy_tail /var/log/omarchy-mac-setup.log "$d/omarchy-mac-setup.log-tail.txt" 200
+  copy_tail /var/log/omarchy-install.log "$d/omarchy-install.log-tail.txt" 200
+  copy_tail /var/log/pacman.log "$d/pacman.log-tail.txt" 200
+  capture "$d/dmesg-tail.txt" -c 'dmesg -T | tail -n 200'
+}
+
+phase_wrap() {
+  local log="$outdir/tty-session.log"
+  echo "== recording this terminal to $log =="
+  echo "Run the installer in this shell. Type exit when you need to stop recording."
+  echo "A reboot ends the recording; re-run auto on the next boot (use tty2 if tty1 is the setup unit)."
+  if ! have script; then
+    echo "e2e-capture: script(1) is not installed (util-linux)" >&2
+    exit 1
+  fi
+  if [[ "$os" == Darwin ]]; then
+    script "$log" </dev/tty
+  else
+    script -f "$log" </dev/tty
+  fi
+}
+
+combine() {
+  local combined="$outdir/COMBINED.txt"
+  {
+    echo "===== omarchy-mac e2e evidence ====="
+    echo "outdir=$outdir"
+    echo
+    find "$outdir" -type f ! -name COMBINED.txt | sort | while IFS= read -r f; do
+      echo "########## ${f#"$outdir"/} ##########"
+      cat "$f"
+      echo
+    done
+  } >"$combined"
+}
+
+run_auto() {
+  if [[ "$os" == Darwin ]]; then
+    phase_macos
+    return
+  fi
+  phase_asahi
+  phase_start
+  phase_desktop
+  phase_persistence
+}
+
+write_meta
+write_report_template
+
+case "$phase" in
+  macos) phase_macos ;;
+  asahi) phase_asahi ;;
+  start) phase_start ;;
+  desktop) phase_desktop ;;
+  persistence) phase_persistence ;;
+  fail) phase_fail ;;
+  auto) run_auto ;;
+  wrap) phase_wrap ;;
+esac
+
+combine
+
+echo
+echo "Evidence saved to $outdir"
+echo "Attach COMBINED.txt (and the directory) to the test ID / GitHub issue."
+echo "Review for serials, passwords, tokens, and private hostnames before publishing."
+echo "Saved to $outdir" >&2
