@@ -20,11 +20,9 @@ On a fresh Asahi Alarm box, as root, after nmtui:
   curl -fsSL https://skuthus.github.io/e2e | bash
 
 That records the install, starts Omarchy Mac setup, and after you sign
-into Omarchy the bundle is:
+into Omarchy share:
 
-  ~/omarchy-mac-e2e
-
-Copy that folder off the machine.
+  ~/omarchy-mac-e2e/REPORT.md
 
 If DNS is broken:
 
@@ -287,56 +285,286 @@ write_meta() {
   } 2>&1 | redact_stream >"$dest"
 }
 
-write_report_template() {
-  local dest="$outdir/01-report-template.txt"
-  local version="" path="" commit=""
-  have omarchy && version="$(omarchy version 2>/dev/null || true)"
-  [[ -n "${OMARCHY_PATH:-}" ]] && path="$OMARCHY_PATH"
-  if [[ -z "$path" && -e /usr/share/omarchy ]]; then
-    path="$(readlink -f /usr/share/omarchy 2>/dev/null || echo /usr/share/omarchy)"
+pick_ev() {
+  local root="$1" name="$2"
+  find "$root" -type f -name "$name" 2>/dev/null | sort | tail -1
+}
+
+pick_ev_first() {
+  local root="$1" name="$2"
+  find "$root" -type f -name "$name" 2>/dev/null | sort | head -1
+}
+
+ev_body() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  awk '/^-----$/{c++; next} c==1{print}' "$file"
+}
+
+ev_exit() {
+  local file="$1"
+  [[ -f "$file" ]] || { echo missing; return; }
+  sed -n 's/^exit=//p' "$file" | tail -1
+}
+
+md_embed() {
+  local title="$1" file="$2" sz=0
+  printf '### %s\n\n' "$title"
+  if [[ -n "$file" && -f "$file" ]]; then
+    sz="$(wc -c <"$file" | tr -d ' ')"
+    if [[ "$sz" -gt 200000 ]]; then
+      printf '_Omitted from this markdown (%s bytes). See `%s` in the evidence folder._\n\n' "$sz" "$file"
+      return 0
+    fi
+    printf '```\n'
+    cat "$file"
+    printf '\n```\n\n'
+  else
+    printf '_Not captured._\n\n'
   fi
-  if [[ -d "${path:-}/.git" ]]; then
-    commit="$(git -C "$path" rev-parse --short HEAD 2>/dev/null || true)"
-  elif [[ -d "$HOME/.local/share/omarchy/.git" ]]; then
-    commit="$(git -C "$HOME/.local/share/omarchy" rev-parse --short HEAD 2>/dev/null || true)"
+}
+
+write_share_md() {
+  local root="$1" dest="${2:-$root/REPORT.md}"
+  local f="" model="" compatible="" ram="" ssd="" fstype="" boot_src="" root_src="" keymap="" version="" commit=""
+  local want_encrypt="" setup_user="" setup_host="" setup_repo="" setup_ref=""
+  local baseline="NEEDS TESTER" boot_layout="NEEDS TESTER" encryption="NEEDS TESTER"
+  local omarchy_stage="NEEDS TESTER" first_login="NEEDS TESTER"
+  local security="NEEDS TESTER" overall="NEEDS TESTER"
+  local warnings="" conf_rc="" sudoers_rc="" enabled="" bsrc="" rsrc=""
+
+  if [[ -r /proc/device-tree/model ]]; then
+    model="$(tr -d '\0' </proc/device-tree/model)"
   fi
-  cat >"$dest" <<EOF
-Test ID: ${test_id:-}
-Tester: ${tester:-}
-Date/timezone: $(date -Is 2>/dev/null || date) $(date +%Z 2>/dev/null || true)
-Mac model / Apple identifier / SoC / RAM:
-$(if [[ -r /proc/device-tree/model ]]; then tr -d '\0' </proc/device-tree/model; echo; fi)
-$(if [[ -r /proc/device-tree/compatible ]]; then tr '\0' ' ' </proc/device-tree/compatible; echo; fi)
-macOS version:
-Asahi image and filesystem:
-Encryption and keymap:
-Omarchy repo / ref / installed version: ${repo:-} ${ref:-} ${version} ${commit}
-Test command: ${install_command:-}
+  if [[ -r /proc/device-tree/compatible ]]; then
+    compatible="$(tr '\0' ' ' </proc/device-tree/compatible)"
+  fi
+  ram="$(awk '/MemTotal/{print $2, $3}' /proc/meminfo 2>/dev/null || true)"
+  f="$(pick_ev "$root" setup-conf.txt)"
+  if [[ -f "$f" ]]; then
+    want_encrypt="$(sed -n 's/^WANT_ENCRYPT=//p' "$f" | tail -1 | tr -d "'\"")"
+    setup_user="$(sed -n 's/^SETUP_USER=//p' "$f" | tail -1 | tr -d "'\"")"
+    setup_host="$(sed -n 's/^SETUP_HOSTNAME=//p' "$f" | tail -1 | tr -d "'\"")"
+    setup_repo="$(sed -n 's/^SETUP_REPO=//p' "$f" | tail -1 | tr -d "'\"")"
+    setup_ref="$(sed -n 's/^SETUP_REF=//p' "$f" | tail -1 | tr -d "'\"")"
+    keymap="$(sed -n 's/^SETUP_KEYMAP=//p' "$f" | tail -1 | tr -d "'\"")"
+  fi
+  [[ -n "$keymap" ]] || keymap="$(awk -F= '/^KEYMAP=/{print $2}' /etc/vconsole.conf 2>/dev/null | tr -d '"' | tail -1)"
+  f="$(pick_ev "$root" findmnt-root.txt)"
+  root_src="$(ev_body "$f" 2>/dev/null | tail -1)"
+  f="$(pick_ev "$root" findmnt-boot.txt)"
+  boot_src="$(ev_body "$f" 2>/dev/null | tail -1)"
+  fstype="$(printf '%s\n' "$root_src" | awk '{print $3}')"
+  f="$(pick_ev "$root" lsblk-size.txt)"
+  ssd="$(ev_body "$f" 2>/dev/null | awk 'NR>1{print}' | tr '\n' '; ')"
+  f="$(pick_ev "$root" omarchy-version.txt)"
+  version="$(ev_body "$f" 2>/dev/null | tail -1)"
+  f="$(pick_ev "$root" omarchy-git-head.txt)"
+  commit="$(ev_body "$f" 2>/dev/null | tail -1)"
+  [[ -n "$setup_repo" ]] || setup_repo="$repo"
+  [[ -n "$setup_ref" ]] || setup_ref="$ref"
 
-Fresh Asahi baseline: PASS / FAIL
-Boot-layout stage: PASS / FAIL / SKIP
-Encryption stage: PASS / FAIL / SKIP
-Omarchy install stage: PASS / FAIL
-First login: PASS / FAIL
-Second login: PASS / FAIL
-Normal reboot: PASS / FAIL
-Cold boot: PASS / FAIL
-Hardware smoke test: PASS / FAIL / SKIP
-Security cleanup: PASS / FAIL
+  f="$(pick_ev_first "$root" uname-a.txt)"
+  if [[ "$(ev_exit "$f")" == 0 ]]; then
+    baseline="PASS"
+  elif [[ -n "$f" ]]; then
+    baseline="FAIL"
+  fi
 
-Overall: PASS / FAIL / BLOCKED
-First failing checkpoint:
-Expected:
-Actual:
-Reproduction steps:
-Warnings / skipped packages:
-Logs, photos, or video: $outdir
-Related issue/PR: ${test_id:-}
-Notes and clearly labelled hypotheses:
+  if [[ "$want_encrypt" == 0 ]]; then
+    boot_layout="SKIP"
+    encryption="SKIP"
+  else
+    if [[ -n "$boot_src" && -n "$root_src" && "$boot_src" != "$root_src" ]] \
+      && printf '%s\n' "$boot_src" | grep -q . \
+      && ! printf '%s\n' "$boot_src" | grep -qi 'not captured\|missing\|error'; then
+      bsrc="$(printf '%s\n' "$boot_src" | awk '{print $2}')"
+      rsrc="$(printf '%s\n' "$root_src" | awk '{print $2}')"
+      if [[ -n "$bsrc" && -n "$rsrc" && "$bsrc" != "$rsrc" ]]; then
+        boot_layout="PASS"
+      fi
+    fi
+    f="$(pick_ev "$root" omarchy-mac-setup-status.txt)"
+    if ev_body "$f" 2>/dev/null | grep -qi 'encrypted'; then
+      encryption="PASS"
+    fi
+  fi
 
-Evidence directory: $outdir
-Attach COMBINED.txt plus this directory. Redact any remaining serials/passwords before publishing.
-EOF
+  if [[ -n "$version" ]]; then
+    omarchy_stage="PASS"
+  fi
+  if [[ "$phase" == first-login ]]; then
+    first_login="PASS"
+  fi
+
+  f="$(pick_ev "$root" setup-conf-exists.txt)"
+  conf_rc="$(ev_body "$f" 2>/dev/null | sed -n 's/setup_conf=//p' | tail -1)"
+  f="$(pick_ev "$root" setup-sudoers-exists.txt)"
+  sudoers_rc="$(ev_body "$f" 2>/dev/null | sed -n 's/setup_sudoers=//p' | tail -1)"
+  f="$(pick_ev "$root" setup-service-enabled.txt)"
+  enabled="$(ev_body "$f" 2>/dev/null | tail -1)"
+  if [[ "$conf_rc" == 1 && "$sudoers_rc" == 1 ]]; then
+    security="PASS"
+  elif [[ "$conf_rc" == 0 || "$sudoers_rc" == 0 || "$enabled" == enabled ]]; then
+    security="FAIL"
+  fi
+
+  if find "$root" -type d -name '08-fail' 2>/dev/null | grep -q . \
+    || find "$root" -type d -name 'fail-*' 2>/dev/null | grep -q .; then
+    overall="FAIL"
+  fi
+
+  f="$(pick_ev "$root" warnings-skips.txt)"
+  warnings="$(ev_body "$f" 2>/dev/null | tail -n 40)"
+
+  mkdir -p "$(dirname "$dest")"
+  {
+    echo "# Omarchy Mac E2E report"
+    echo
+    echo "Share **this file** back with the test ID / GitHub issue. Review for serials, passwords, and tokens before publishing."
+    echo
+    echo "Generated: $(date -Is 2>/dev/null || date)"
+    echo
+    echo "## Report template"
+    echo
+    echo '```'
+    echo "Test ID: ${test_id:-}"
+    echo "Tester: ${tester:-}"
+    echo "Date/timezone: $(date -Is 2>/dev/null || date) $(date +%Z 2>/dev/null || true)"
+    echo "Mac model / Apple identifier / SoC / RAM: ${model:-} / ${compatible:-} / ${ram:-}"
+    echo "macOS version: (capture on macOS with the same curl, or fill in)"
+    echo "Asahi image and filesystem: $(ev_body "$(pick_ev_first "$root" os-release.txt)" 2>/dev/null | grep -E '^(NAME|ID|VERSION_ID|BUILD_ID)=' | tr '\n' ' ') ${fstype:-}"
+    echo "Encryption and keymap: want_encrypt=${want_encrypt:-?} keymap=${keymap:-?} host=${setup_host:-} user=${setup_user:-}"
+    echo "Omarchy repo / ref / installed version: ${setup_repo:-} ${setup_ref:-} ${version:-} ${commit:-}"
+    echo "Test command: ${install_command:-curl -fsSL https://skuthus.github.io/e2e | bash}"
+    echo
+    echo "Fresh Asahi baseline: $baseline"
+    echo "Boot-layout stage: $boot_layout"
+    echo "Encryption stage: $encryption"
+    echo "Omarchy install stage: $omarchy_stage"
+    echo "First login: $first_login"
+    echo "Second login: NEEDS TESTER"
+    echo "Normal reboot: NEEDS TESTER"
+    echo "Cold boot: NEEDS TESTER"
+    echo "Hardware smoke test: NEEDS TESTER"
+    echo "Security cleanup: $security"
+    echo
+    echo "Overall: $overall"
+    echo "First failing checkpoint:"
+    echo "Expected:"
+    echo "Actual:"
+    echo "Reproduction steps:"
+    echo "Warnings / skipped packages:"
+    printf '%s\n' "${warnings:-}"
+    echo "Logs, photos, or video: $root/REPORT.md plus this folder"
+    echo "Related issue/PR: ${test_id:-}"
+    echo "Notes and clearly labelled hypotheses:"
+    echo '```'
+    echo
+    echo "PASS/FAIL values above are from captured commands only. Items marked **NEEDS TESTER** are observational (display, keyboard, audio, suspend, second login, cold boot) and must be filled by the volunteer."
+    echo
+    echo "## 1. Test assignment"
+    echo
+    echo "| Field | Value |"
+    echo "|---|---|"
+    echo "| Tester | ${tester:-} |"
+    echo "| Test ID | ${test_id:-} |"
+    echo "| Date / timezone | $(date -Is 2>/dev/null || date) $(date +%Z 2>/dev/null || true) |"
+    echo "| Mac model | ${model:-} |"
+    echo "| Compatible / identifier | ${compatible:-} |"
+    echo "| RAM | ${ram:-} |"
+    echo "| SSD | ${ssd:-} |"
+    echo "| Keymap | ${keymap:-} |"
+    echo "| Encrypt requested | ${want_encrypt:-} |"
+    echo "| Hostname | ${setup_host:-} |"
+    echo "| Username | ${setup_user:-} |"
+    echo "| Repo / ref | ${setup_repo:-} / ${setup_ref:-} |"
+    echo "| Installed version | ${version:-} |"
+    echo "| Commit | ${commit:-} |"
+    echo
+    echo "## 2. macOS preparation"
+    echo
+    echo "Observational safety checkboxes are not automated. Command output (if this was run on macOS):"
+    echo
+    md_embed "system_profiler SPHardwareDataType" "$(pick_ev "$root" system_profiler-SPHardwareDataType.txt)"
+    md_embed "sw_vers" "$(pick_ev "$root" sw_vers.txt)"
+    md_embed "diskutil list" "$(pick_ev "$root" diskutil-list.txt)"
+    echo "## 3. Fresh Asahi baseline"
+    echo
+    md_embed "uname -a" "$(pick_ev_first "$root" uname-a.txt)"
+    md_embed "cat /etc/os-release" "$(pick_ev_first "$root" os-release.txt)"
+    md_embed "findmnt /" "$(pick_ev_first "$root" findmnt-root.txt)"
+    md_embed "findmnt /boot" "$(pick_ev_first "$root" findmnt-boot.txt)"
+    md_embed "lsblk -f" "$(pick_ev_first "$root" lsblk-f.txt)"
+    md_embed "df -h / /boot" "$(pick_ev_first "$root" df-h-root-boot.txt)"
+    md_embed "free -h" "$(pick_ev_first "$root" free-h.txt)"
+    md_embed "freshness (Omarchy not already installed)" "$(pick_ev_first "$root" freshness.txt)"
+    echo "## 4. Guided installer"
+    echo
+    md_embed "invocation (command, repo, ref, start time)" "$(pick_ev "$root" invocation.txt)"
+    md_embed "omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
+    md_embed "/etc/omarchy-mac-setup.conf (encryption, hostname, user, keymap, repo)" "$(pick_ev "$root" setup-conf.txt)"
+    md_embed "warnings / skipped / unavailable packages" "$(pick_ev "$root" warnings-skips.txt)"
+    md_embed "omarchy-mac-setup.log (tail)" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
+    echo "## 5. Reboot checkpoints"
+    echo
+    echo "Observational (Apple boot, passphrase prompt, blank screen) need a tester. Storage/resume evidence:"
+    echo
+    md_embed "latest findmnt /" "$(pick_ev "$root" findmnt-root.txt)"
+    md_embed "latest findmnt /boot" "$(pick_ev "$root" findmnt-boot.txt)"
+    md_embed "latest lsblk -f" "$(pick_ev "$root" lsblk-f.txt)"
+    md_embed "latest omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
+    echo "## 6. First desktop login — installed-system state"
+    echo
+    echo "Observational (notch, apps, audio, lock, suspend, theme) need a tester."
+    echo
+    md_embed "omarchy version" "$(pick_ev "$root" omarchy-version.txt)"
+    md_embed "OMARCHY_PATH" "$(pick_ev "$root" OMARCHY_PATH.txt)"
+    md_embed "readlink -f /usr/share/omarchy" "$(pick_ev "$root" usr-share-omarchy.txt)"
+    md_embed "pacman -Q omarchy omarchy-settings hyprland hyprtoolkit hyprland-guiutils aquamarine" "$(pick_ev "$root" pacman-Q-core.txt)"
+    md_embed "pacman -Dk" "$(pick_ev "$root" pacman-Dk.txt)"
+    md_embed "systemctl --failed" "$(pick_ev "$root" systemctl-failed.txt)"
+    md_embed "systemctl --user --failed" "$(pick_ev "$root" systemctl-user-failed.txt)"
+    md_embed "omarchy-migrate --pending (exit 0 = pending, 1 = none)" "$(pick_ev "$root" omarchy-migrate-pending.txt)"
+    md_embed "omarchy-done check finalize-user" "$(pick_ev "$root" omarchy-done-finalize-user.txt)"
+    md_embed "omarchy-done check first-run-user" "$(pick_ev "$root" omarchy-done-first-run-user.txt)"
+    md_embed "swapon --show" "$(pick_ev "$root" swapon.txt)"
+    md_embed "speakersafetyd" "$(pick_ev "$root" speakersafetyd.txt)"
+    echo "## 7. Persistence and security"
+    echo
+    echo "Second login, normal reboot, and cold boot need a tester. Cleanup commands:"
+    echo
+    md_embed "systemctl is-enabled omarchy-mac-setup.service" "$(pick_ev "$root" setup-service-enabled.txt)"
+    md_embed "test -e /etc/omarchy-mac-setup.conf" "$(pick_ev "$root" setup-conf-exists.txt)"
+    md_embed "test -e /etc/sudoers.d/01-omarchy-mac-setup" "$(pick_ev "$root" setup-sudoers-exists.txt)"
+    md_embed "journalctl -b -p warning" "$(pick_ev "$root" journalctl-b-warning.txt)"
+    md_embed "journalctl --user -b -p warning" "$(pick_ev "$root" journalctl-user-b-warning.txt)"
+    md_embed "LoadState=not-found units" "$(pick_ev "$root" not-found-units.txt)"
+    md_embed "ufw status" "$(pick_ev "$root" ufw-status.txt)"
+    md_embed "sshd is-enabled" "$(pick_ev "$root" sshd-enabled.txt)"
+    md_embed "passwd -S root" "$(pick_ev "$root" root-passwd-status.txt)"
+    echo "## 8. Failure evidence"
+    echo
+    md_embed "omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
+    md_embed "systemctl status omarchy-mac-setup.service" "$(pick_ev "$root" systemctl-setup.txt)"
+    md_embed "journalctl --list-boots" "$(pick_ev "$root" journalctl-list-boots.txt)"
+    md_embed "journalctl -b" "$(pick_ev "$root" journalctl-current-boot.txt)"
+    md_embed "findmnt" "$(pick_ev "$root" findmnt.txt)"
+    md_embed "tail omarchy-mac-setup.log" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
+    md_embed "tail omarchy-install.log" "$(pick_ev "$root" omarchy-install.log-tail.txt)"
+    md_embed "tail pacman.log" "$(pick_ev "$root" pacman.log-tail.txt)"
+    echo "## Human-only checklist items"
+    echo
+    echo "These cannot be captured by the script. Fill them in the template above."
+    echo
+    echo "- Safety: macOS backup, recoverability, power, no speaker-protection disable"
+    echo "- Installer: last visible line / photo before each reboot; ARM-unavailable prompt = No"
+    echo "- Reboots: Apple → m1n1 → U-Boot menu; passphrase prompt; no blank screen; resume on tty1"
+    echo "- Desktop: notch layout, apps, keyboard/trackpad/brightness, audio, lock, suspend, theme"
+    echo "- Persistence: second login, normal reboot, cold boot, sudo with password"
+    echo
+  } >"$dest"
+  printf '  wrote %s\n' "${dest}"
 }
 
 phase_macos() {
@@ -361,12 +589,22 @@ phase_asahi() {
   capture "$d/findmnt-root.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /
   capture "$d/findmnt-boot.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /boot
   capture "$d/lsblk-f.txt" lsblk -f
+  capture "$d/lsblk-size.txt" lsblk -d -o NAME,SIZE,TYPE,MODEL,TRAN
   capture "$d/df-h-root-boot.txt" df -h / /boot
   capture "$d/free-h.txt" free -h
+  capture "$d/meminfo.txt" -c 'awk "/MemTotal|MemAvailable/" /proc/meminfo'
+  capture "$d/hostnamectl.txt" hostnamectl
   capture "$d/timedatectl.txt" timedatectl
   capture "$d/localectl.txt" localectl status
   capture "$d/vconsole.txt" -c 'cat /etc/vconsole.conf 2>/dev/null || true'
   capture "$d/ip-route.txt" ip route
+  capture "$d/ip-br-addr.txt" ip -br addr
+  capture "$d/nmcli-device.txt" nmcli -t device status
+  capture "$d/dns-github.txt" -c '
+    getent ahosts github.com || true
+    getent ahosts raw.githubusercontent.com || true
+    getent ahosts cdn.jsdelivr.net || true
+  '
   capture "$d/freshness.txt" -c '
     echo "omarchy_share=$(test -e /usr/share/omarchy; echo $?)"
     echo "setup_conf=$(test -e /etc/omarchy-mac-setup.conf; echo $?)"
@@ -399,6 +637,16 @@ phase_start() {
   capture "$d/findmnt-root.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /
   capture "$d/findmnt-boot.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /boot
   capture "$d/lsblk-f.txt" lsblk -f
+  capture "$d/src-git-head.txt" git -C /var/lib/omarchy-mac-setup/src rev-parse HEAD
+  copy_tail /var/log/omarchy-mac-setup.log "$d/omarchy-mac-setup.log-tail500.txt" 500
+  copy_tail /var/log/omarchy-install.log "$d/omarchy-install.log-tail.txt" 200
+  capture "$d/warnings-skips.txt" -c '
+    for f in /var/log/omarchy-mac-setup.log /var/log/omarchy-install.log /var/log/pacman.log; do
+      [[ -r "$f" ]] || continue
+      echo "----- $f -----"
+      grep -iE "warn|skip|unavailable|error|fail" "$f" | tail -n 80 || true
+    done
+  '
 }
 
 phase_desktop() {
@@ -436,6 +684,17 @@ phase_desktop() {
     capture "$d/omarchy-git-status.txt" git -C "/home/$user/.local/share/omarchy" status -sb
     capture "$d/omarchy-git-remote.txt" git -C "/home/$user/.local/share/omarchy" remote -v
   fi
+  capture "$d/id.txt" id
+  capture "$d/nmcli-device.txt" nmcli -t device status
+  capture "$d/resolvectl.txt" resolvectl status
+  capture "$d/ping-1111.txt" ping -c 1 -W 2 1.1.1.1
+  capture "$d/speakersafetyd.txt" systemctl is-active speakersafetyd
+  capture "$d/display-manager.txt" -c '
+    systemctl is-enabled display-manager.service
+    systemctl is-enabled sddm.service
+    systemctl is-active sddm.service
+    echo "dm_symlink=$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null || true)"
+  '
 }
 
 phase_persistence() {
@@ -456,6 +715,9 @@ phase_persistence() {
   capture "$d/ufw-status.txt" ufw status verbose
   capture "$d/sshd-enabled.txt" systemctl is-enabled sshd
   capture "$d/root-passwd-status.txt" passwd -S root
+  capture "$d/id.txt" id
+  capture "$d/wheel-groups.txt" -c 'id -nG; getent group wheel'
+  capture "$d/speakersafetyd.txt" systemctl is-active speakersafetyd
 }
 
 phase_fail() {
@@ -659,6 +921,7 @@ EOF
       echo
     done
   } >"$dest/COMBINED.txt" 2>/dev/null || true
+  write_share_md "$dest" "$dest/REPORT.md"
   date -Is >"$dest/READY" 2>/dev/null || date >"$dest/READY"
   : >"$stamp_file"
   systemctl --user disable --now omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
@@ -666,10 +929,11 @@ EOF
   echo
   echo "========================================"
   echo "E2E capture complete."
-  echo "Copy this folder off the machine:"
+  echo "Share this markdown file:"
   echo
-  echo "  $dest"
+  echo "  $dest/REPORT.md"
   echo
+  echo "Or copy the whole folder: $dest"
   echo "========================================"
 }
 
@@ -696,9 +960,9 @@ phase_run() {
   echo
   echo "========================================"
   echo "Recording this install through setup."
-  echo "When Omarchy first signs you in, copy:"
+  echo "When Omarchy first signs you in, share:"
   echo
-  echo "  ~/omarchy-mac-e2e"
+  echo "  ~/omarchy-mac-e2e/REPORT.md"
   echo
   echo "Starting Omarchy Mac setup now."
   echo "========================================"
@@ -716,12 +980,13 @@ combine() {
     echo "===== omarchy-mac e2e evidence ====="
     echo "outdir=$outdir"
     echo
-    find "$outdir" -type f ! -name COMBINED.txt | sort | while IFS= read -r f; do
+    find "$outdir" -type f ! -name COMBINED.txt ! -name REPORT.md | sort | while IFS= read -r f; do
       echo "########## ${f#"$outdir"/} ##########"
       cat "$f"
       echo
     done
   } >"$combined"
+  write_share_md "$outdir" "$outdir/REPORT.md"
 }
 
 run_auto() {
@@ -736,7 +1001,6 @@ run_auto() {
 }
 
 write_meta
-write_report_template
 
 case "$phase" in
   macos) phase_macos ;;
