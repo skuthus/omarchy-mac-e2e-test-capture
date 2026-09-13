@@ -15,45 +15,30 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: omarchy-mac-e2e-capture <phase> [options]
+On a fresh Asahi Alarm box, as root, after nmtui:
 
-Phases:
-  macos          Checklist §2 — macOS hardware / diskutil (run in macOS)
-  asahi          Checklist §3 — fresh Asahi baseline
-  start          Checklist §4 — installer command, repo/ref, setup status
-  desktop        Checklist §6 — installed-system state after first login
-  persistence    Checklist §7 — cleanup, failed units, warning journals
-  fail           Checklist §8 — failure evidence; run before any repair
-  auto           Run every phase that applies on this machine
-  wrap           Record this terminal until you exit (pre-reboot lines)
+  curl -fsSL https://skuthus.github.io/e2e | bash
 
-Options:
-  -o, --out DIR      Evidence directory (default: ~/omarchy-mac-e2e/<stamp>)
-  --tester NAME      Written into META and the report template
-  --test-id ID       Tracking issue / test ID
-  --command TEXT     Exact installer command you ran or will run
-  --repo OWNER/REPO  Recorded Omarchy repo
-  --ref REF          Recorded branch / tag / commit
-  -h, --help
+That records the install, starts Omarchy Mac setup, and after you sign
+into Omarchy the bundle is:
 
-Environment: E2E_OUT, E2E_TESTER, E2E_TEST_ID, E2E_COMMAND, E2E_REPO, E2E_REF
+  ~/omarchy-mac-e2e
 
-Typical Asahi run, after each boot, on tty2 if tty1 is the installer:
+Copy that folder off the machine.
 
-  curl -fsSL https://skuthus.github.io/e2e | bash -s -- auto --tester YOU --test-id ISSUE
+If DNS is broken:
 
-  curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e \
-    | bash -s -- auto --tester YOU --test-id ISSUE
+  curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e | bash
 
-On failure, before touching storage or re-running setup:
-
-  ... | bash -s -- fail --tester YOU --test-id ISSUE
+Advanced phases (usually unneeded): macos asahi start desktop persistence fail auto wrap
 EOF
 }
 
-phase="${1:-}"
-if [[ -n "$phase" ]]; then
-  shift
+phase="${1:-run}"
+if [[ "$phase" == -* ]]; then
+  phase=run
+else
+  [[ $# -gt 0 ]] && shift
 fi
 
 outdir=""
@@ -62,6 +47,14 @@ test_id="${E2E_TEST_ID:-}"
 install_command="${E2E_COMMAND:-}"
 repo="${E2E_REPO:-}"
 ref="${E2E_REF:-}"
+setup_args=()
+
+if [[ -r /etc/omarchy-mac-e2e.conf ]]; then
+  # shellcheck source=/dev/null
+  . /etc/omarchy-mac-e2e.conf
+  tester="${E2E_TESTER:-$tester}"
+  test_id="${E2E_TEST_ID:-$test_id}"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -89,20 +82,26 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
+    --)
+      shift
+      setup_args+=("$@")
+      break
+      ;;
     *)
-      echo "e2e-capture: unknown argument: $1" >&2
-      usage >&2
-      exit 2
+      if [[ "$phase" == run ]]; then
+        setup_args+=("$1")
+        shift
+      else
+        echo "e2e-capture: unknown argument: $1" >&2
+        usage >&2
+        exit 2
+      fi
       ;;
   esac
 done
 
 case "$phase" in
-  ""|-h|--help)
-    usage
-    exit 0
-    ;;
-  macos|asahi|start|pre|desktop|persistence|fail|auto|wrap) ;;
+  macos|asahi|start|pre|desktop|persistence|fail|auto|wrap|run|boot-snapshot|first-login) ;;
   *)
     echo "e2e-capture: unknown phase: $phase" >&2
     usage >&2
@@ -120,17 +119,38 @@ node="${node%%.*}"
 node="${node//[^A-Za-z0-9._-]/_}"
 node="${node:-unknown}"
 stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+E2E_ROOT="${E2E_ROOT:-/var/lib/omarchy-mac-e2e}"
+USER_BUNDLE="${HOME:-/root}/omarchy-mac-e2e"
+quiet_footer=0
 
 if [[ -z "$outdir" ]]; then
   if [[ -n "${E2E_OUT:-}" ]]; then
     outdir="$E2E_OUT"
-  elif [[ -n "${HOME:-}" && -w "${HOME}" ]]; then
-    outdir="$HOME/omarchy-mac-e2e/${stamp}-${phase}"
   else
-    outdir="/tmp/omarchy-mac-e2e/${stamp}-${phase}"
+    case "$phase" in
+      run) outdir="$E2E_ROOT/00-baseline" ;;
+      boot-snapshot) outdir="$E2E_ROOT/boot-${stamp}" ;;
+      first-login) outdir="$USER_BUNDLE/first-login" ;;
+      fail) outdir="$E2E_ROOT/fail-${stamp}" ;;
+      *)
+        if [[ -n "${HOME:-}" && -w "${HOME}" ]]; then
+          outdir="$HOME/omarchy-mac-e2e/${stamp}-${phase}"
+        else
+          outdir="/tmp/omarchy-mac-e2e/${stamp}-${phase}"
+        fi
+        ;;
+    esac
   fi
 fi
-mkdir -p "$outdir"
+if ! mkdir -p "$outdir" 2>/dev/null; then
+  if [[ "$phase" == run && "${EUID:-1}" -ne 0 ]]; then
+    echo "e2e-capture: run as root on fresh Asahi:" >&2
+    echo "  curl -fsSL https://skuthus.github.io/e2e | bash" >&2
+    exit 1
+  fi
+  echo "e2e-capture: cannot create $outdir" >&2
+  exit 1
+fi
 
 redact_stream() {
   sed -E \
@@ -477,6 +497,219 @@ phase_wrap() {
   fi
 }
 
+fetch_url() {
+  local url="$1" dest="$2"
+  curl -fsSL --doh-url https://1.1.1.1/dns-query --connect-timeout 15 --max-time 45 "$url" -o "$dest" \
+    && [[ -s "$dest" ]] && return 0
+  curl -fsSL --connect-timeout 15 --max-time 45 "$url" -o "$dest" \
+    && [[ -s "$dest" ]]
+}
+
+install_self_to_disk() {
+  local dest=/usr/local/bin/omarchy-mac-e2e-capture
+  local self="${BASH_SOURCE[0]:-}"
+  if [[ -n "$self" && -f "$self" ]]; then
+    install -Dm755 "$self" "$dest"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  fetch_url "https://raw.githubusercontent.com/skuthus/omarchy-mac-e2e-test-capture/main/omarchy-mac-e2e-capture" "$tmp" \
+    || fetch_url "https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@main/omarchy-mac-e2e-capture" "$tmp" \
+    || { rm -f "$tmp"; echo "e2e-capture: could not install myself to $dest" >&2; return 1; }
+  install -Dm755 "$tmp" "$dest"
+  rm -f "$tmp"
+}
+
+save_e2e_conf() {
+  mkdir -p /etc
+  {
+    printf 'E2E_TESTER=%q\n' "${tester:-}"
+    printf 'E2E_TEST_ID=%q\n' "${test_id:-}"
+    printf 'E2E_COMMAND=%q\n' "${install_command:-}"
+    printf 'E2E_REPO=%q\n' "${repo:-}"
+    printf 'E2E_REF=%q\n' "${ref:-}"
+  } >/etc/omarchy-mac-e2e.conf
+  chmod 644 /etc/omarchy-mac-e2e.conf
+}
+
+install_hooks() {
+  mkdir -p "$E2E_ROOT" /etc/systemd/system /etc/systemd/user \
+    /etc/systemd/system/omarchy-mac-setup.service.d
+  chmod 755 "$E2E_ROOT"
+
+  cat >/etc/systemd/system/omarchy-mac-e2e-boot.service <<'EOF'
+[Unit]
+Description=Omarchy Mac E2E boot snapshot
+After=local-fs.target
+Before=omarchy-mac-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/omarchy-mac-e2e-capture boot-snapshot
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat >/etc/systemd/system/omarchy-mac-e2e-fail.service <<'EOF'
+[Unit]
+Description=Omarchy Mac E2E failure snapshot
+After=omarchy-mac-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/omarchy-mac-e2e-capture fail
+Nice=10
+EOF
+
+  cat >/etc/systemd/system/omarchy-mac-setup.service.d/e2e-capture.conf <<'EOF'
+[Unit]
+OnFailure=omarchy-mac-e2e-fail.service
+EOF
+
+  cat >/etc/systemd/user/omarchy-mac-e2e-first-login.service <<'EOF'
+[Unit]
+Description=Omarchy Mac E2E first-login bundle
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 8
+ExecStart=/usr/local/bin/omarchy-mac-e2e-capture first-login
+
+[Install]
+WantedBy=default.target
+EOF
+
+  cat >"$E2E_ROOT/README.txt" <<'EOF'
+Omarchy Mac E2E evidence (install-time snapshots).
+
+After you sign into Omarchy, the copy-off folder is:
+
+  ~/omarchy-mac-e2e
+EOF
+
+  systemctl daemon-reload
+  systemctl enable omarchy-mac-e2e-boot.service >/dev/null 2>&1 || true
+  systemctl --global enable omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
+}
+
+fetch_setup() {
+  local dest=/usr/local/bin/omarchy-mac-setup
+  local tmp
+  tmp="$(mktemp)"
+  if fetch_url "https://cdn.jsdelivr.net/gh/omacom/omarchy-mac@quattro/bin/omarchy-mac-setup" "$tmp" \
+    || fetch_url "https://raw.githubusercontent.com/omacom/omarchy-mac/quattro/bin/omarchy-mac-setup" "$tmp" \
+    || fetch_url "https://cdn.jsdelivr.net/gh/omarchy-mac/omarchy-mac@quattro/bin/omarchy-mac-setup" "$tmp"; then
+    if head -1 "$tmp" | grep -q '^#!/'; then
+      install -Dm755 "$tmp" "$dest"
+      rm -f "$tmp"
+      printf '%s' "$dest"
+      return 0
+    fi
+  fi
+  rm -f "$tmp"
+  echo "e2e-capture: could not download omarchy-mac-setup" >&2
+  return 1
+}
+
+phase_boot_snapshot() {
+  quiet_footer=1
+  chmod a+rX "$E2E_ROOT" 2>/dev/null || true
+  chmod a+rX "$outdir" 2>/dev/null || true
+  phase_asahi
+  phase_start
+  if systemctl is-failed omarchy-mac-setup.service >/dev/null 2>&1; then
+    phase_fail
+  fi
+}
+
+phase_first_login() {
+  local dest="$USER_BUNDLE"
+  local stamp_file="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-mac-e2e-first-login-done"
+  mkdir -p "$(dirname "$stamp_file")" "$dest/install"
+  if [[ -f "$stamp_file" ]]; then
+    echo "First-login capture already ran. Bundle is $dest"
+    quiet_footer=1
+    return 0
+  fi
+  if [[ -d "$E2E_ROOT" ]]; then
+    cp -a "$E2E_ROOT"/. "$dest/install/" 2>/dev/null || true
+  fi
+  phase_desktop
+  phase_persistence
+  cat >"$dest/README.txt" <<EOF
+Omarchy Mac E2E evidence bundle
+
+Copy this whole folder off the machine (USB, scp, gist, GitHub issue).
+
+tester=${tester:-}
+test_id=${test_id:-}
+captured_at=$(date -Is 2>/dev/null || date)
+EOF
+  {
+    echo "===== omarchy-mac e2e bundle ====="
+    echo "bundle=$dest"
+    echo
+    find "$dest" -type f ! -name COMBINED.txt | sort | while IFS= read -r f; do
+      echo "########## ${f#"$dest"/} ##########"
+      cat "$f"
+      echo
+    done
+  } >"$dest/COMBINED.txt" 2>/dev/null || true
+  date -Is >"$dest/READY" 2>/dev/null || date >"$dest/READY"
+  : >"$stamp_file"
+  systemctl --user disable --now omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
+  quiet_footer=1
+  echo
+  echo "========================================"
+  echo "E2E capture complete."
+  echo "Copy this folder off the machine:"
+  echo
+  echo "  $dest"
+  echo
+  echo "========================================"
+}
+
+phase_run() {
+  if [[ "$os" == Darwin ]]; then
+    echo "On macOS this only records hardware. Run the same curl on Asahi as root to start the install."
+    phase_macos
+    return 0
+  fi
+  if [[ "${EUID:-1}" -ne 0 ]]; then
+    echo "e2e-capture: run as root on fresh Asahi so it can start setup and record across reboots." >&2
+    echo "  curl -fsSL https://skuthus.github.io/e2e | bash" >&2
+    exit 1
+  fi
+  install_self_to_disk
+  save_e2e_conf
+  install_hooks
+  install_command="${install_command:-curl -fsSL https://skuthus.github.io/e2e | bash}"
+  phase_asahi
+  phase_start
+  combine
+  local setup
+  setup="$(fetch_setup)" || exit 1
+  echo
+  echo "========================================"
+  echo "Recording this install through setup."
+  echo "When Omarchy first signs you in, copy:"
+  echo
+  echo "  ~/omarchy-mac-e2e"
+  echo
+  echo "Starting Omarchy Mac setup now."
+  echo "========================================"
+  echo
+  if [[ ! -t 0 && -e /dev/tty ]]; then
+    exec bash "$setup" "${setup_args[@]}" </dev/tty
+  else
+    exec bash "$setup" "${setup_args[@]}"
+  fi
+}
+
 combine() {
   local combined="$outdir/COMBINED.txt"
   {
@@ -514,12 +747,21 @@ case "$phase" in
   fail) phase_fail ;;
   auto) run_auto ;;
   wrap) phase_wrap ;;
+  run) phase_run ;;
+  boot-snapshot) phase_boot_snapshot ;;
+  first-login) phase_first_login ;;
 esac
 
 combine
 
-echo
-echo "Evidence saved to $outdir"
-echo "Attach COMBINED.txt (and the directory) to the test ID / GitHub issue."
-echo "Review for serials, passwords, tokens, and private hostnames before publishing."
-echo "Saved to $outdir" >&2
+if [[ "$quiet_footer" -eq 0 ]]; then
+  echo
+  if [[ "$phase" == first-login ]]; then
+    echo "Copy this folder: $USER_BUNDLE"
+  elif [[ "$phase" == run ]]; then
+    echo "After you sign into Omarchy, copy ~/omarchy-mac-e2e"
+  else
+    echo "Evidence saved to $outdir"
+  fi
+  echo "Saved to $outdir" >&2
+fi
