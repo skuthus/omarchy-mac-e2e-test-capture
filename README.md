@@ -2,31 +2,44 @@
 
 Collect host, OS, mount, disk, and memory info on Arch (or any Linux with `util-linux`). Prints the report and writes a timestamped file.
 
-Use the jsDelivr URL. Many networks cannot resolve `raw.githubusercontent.com`.
+Does not call `hostname` (often missing on a minimal Arch install). Uses `uname -n` and `/etc/hostname`.
+
+Pinned URL (v1.0.1):
 
 ```
-https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.0/sysinfo
+https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo
 ```
 
 ## Run on the Arch box (curl only)
 
+If local DNS cannot resolve GitHub/jsDelivr hostnames, use DNS-over-HTTPS against 1.1.1.1:
+
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.0/sysinfo | bash
+curl -fsSL --doh-url https://1.1.1.1/dns-query \
+  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash
 ```
 
-Writes `~/sysinfo-<hostname>-<timestamp>.txt` and prints the same report.
+That writes `~/sysinfo-<host>-<timestamp>.txt` and prints the same report.
 
 Custom path:
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.0/sysinfo | bash -s -- --out /tmp/report.txt
+curl -fsSL --doh-url https://1.1.1.1/dns-query \
+  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo \
+  | bash -s -- --out /tmp/report.txt
 ```
 
-If jsDelivr is also blocked but you can reach GitHub's CDN by IP:
+Skip DNS entirely and pin Cloudflare’s IP:
 
 ```bash
-curl -fsSL --resolve raw.githubusercontent.com:443:185.199.108.133 \
-  https://raw.githubusercontent.com/skuthus/sysinfo/v1.0.0/sysinfo | bash
+curl -fsSL --resolve cdn.jsdelivr.net:443:104.17.208.5 \
+  https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash
+```
+
+Working local DNS:
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash
 ```
 
 ## Run on a remote, store the output here
@@ -35,7 +48,7 @@ The remote also keeps its own copy under `$HOME`.
 
 ```bash
 ssh you@remote-host \
-  'curl -fsSL https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.0/sysinfo | bash' \
+  'curl -fsSL --doh-url https://1.1.1.1/dns-query https://cdn.jsdelivr.net/gh/skuthus/sysinfo@v1.0.1/sysinfo | bash' \
   | tee ~/sysinfo-remote-$(date +%Y%m%d-%H%M%S).txt
 ```
 
@@ -48,7 +61,8 @@ sysinfo-remote you@remote-host /tmp/that-box.txt
 
 ## What it captures
 
-- `hostname` and timestamp
+- kernel node name (`uname -n`) and `/etc/hostname`
+- timestamp
 - `uname -a`
 - `/etc/os-release`
 - `findmnt` for `/` and `/boot`

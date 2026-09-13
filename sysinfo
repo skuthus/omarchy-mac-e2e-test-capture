@@ -40,7 +40,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-host="$(hostname -s 2>/dev/null || hostname)"
+# Minimal Arch may not ship inetutils, so `hostname` is often missing.
+# uname -n and /etc/hostname are always available.
+host="$(uname -n 2>/dev/null || true)"
+if [[ -z "$host" && -r /etc/hostname ]]; then
+  host="$(tr -d ' \t\r\n' </etc/hostname)"
+fi
+host="${host%%.*}"
+host="${host//[^A-Za-z0-9._-]/_}"
+host="${host:-unknown}"
 stamp="$(date +%Y%m%d-%H%M%S)"
 
 if [[ -z "$out" ]]; then
@@ -57,7 +65,10 @@ mkdir -p "$(dirname -- "$out")"
 
 {
   echo "=== host / time ==="
-  hostname
+  uname -n
+  if [[ -r /etc/hostname ]]; then
+    cat /etc/hostname
+  fi
   date -Is
   echo
   echo "=== uname -a ==="
