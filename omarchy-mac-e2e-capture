@@ -40,8 +40,9 @@ Environment: E2E_OUT, E2E_TESTER, E2E_TEST_ID, E2E_COMMAND, E2E_REPO, E2E_REF
 
 Typical Asahi run, after each boot, on tty2 if tty1 is the installer:
 
-  curl -fsSL --doh-url https://1.1.1.1/dns-query \
-    https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
+  curl -fsSL https://skuthus.github.io/e2e | bash -s -- auto --tester YOU --test-id ISSUE
+
+  curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e \
     | bash -s -- auto --tester YOU --test-id ISSUE
 
 On failure, before touching storage or re-running setup:

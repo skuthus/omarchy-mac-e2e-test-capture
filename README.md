@@ -6,18 +6,29 @@ Evidence collector for Omarchy Mac volunteer E2E installs, plus a small host sna
 
 Records the command output the [volunteer E2E checklist](https://github.com/omacom/omarchy-mac) asks for. Run it at each stage (and after every reboot). Writes a timestamped directory plus `COMBINED.txt`. Serial numbers and password/token-looking fields are redacted.
 
-Pinned URL (v1.1.1):
+Shortlink:
 
 ```
-https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture
+https://skuthus.github.io/e2e
 ```
 
 On the Asahi box, after login / after each reboot (use tty2 if tty1 is the guided setup):
 
 ```bash
-curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
+curl -fsSL https://skuthus.github.io/e2e | bash -s -- auto --tester YOU --test-id ISSUE
+```
+
+If DNS is broken:
+
+```bash
+curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e \
   | bash -s -- auto --tester YOU --test-id ISSUE
+```
+
+Pinned full URL (v1.1.1):
+
+```
+https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture
 ```
 
 Phases (checklist sections):
@@ -36,17 +47,13 @@ Phases (checklist sections):
 If the install fails:
 
 ```bash
-curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
-  | bash -s -- fail --tester YOU --test-id ISSUE
+curl -fsSL https://skuthus.github.io/e2e | bash -s -- fail --tester YOU --test-id ISSUE
 ```
 
 From macOS:
 
 ```bash
-curl -fsSL --doh-url https://1.1.1.1/dns-query \
-  https://cdn.jsdelivr.net/gh/skuthus/omarchy-mac-e2e-test-capture@v1.1.1/omarchy-mac-e2e-capture \
-  | bash -s -- macos --tester YOU --test-id ISSUE
+curl -fsSL https://skuthus.github.io/e2e | bash -s -- macos --tester YOU --test-id ISSUE
 ```
 
 Evidence lands in `~/omarchy-mac-e2e/<stamp>-<phase>/`. Attach `COMBINED.txt` and the directory to the test ID. Review for remaining personal data before publishing.
