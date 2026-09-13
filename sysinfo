@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Collect host identity, mounts, disk, and memory. Safe to run via:
+#   curl -fsSL <raw-url> | bash
+#   curl -fsSL <raw-url> | bash -s -- --out /tmp/report.txt
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: sysinfo [--out FILE]
+
+Collects uname, os-release, mount, disk, and memory info.
+Prints the report and writes it to a timestamped file.
+
+Options:
+  -o, --out FILE   Output path (default: ~/sysinfo-<host>-<timestamp>.txt)
+  -h, --help       Show this help
+
+Environment:
+  SYSINFO_OUT      Same as --out, used if --out is not passed
+EOF
+}
+
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--out)
+      [[ $# -ge 2 ]] || { echo "sysinfo: --out requires a path" >&2; exit 2; }
+      out="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "sysinfo: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+host="$(hostname -s 2>/dev/null || hostname)"
+stamp="$(date +%Y%m%d-%H%M%S)"
+
+if [[ -z "$out" ]]; then
+  if [[ -n "${SYSINFO_OUT:-}" ]]; then
+    out="$SYSINFO_OUT"
+  elif [[ -n "${HOME:-}" && -w "${HOME}" ]]; then
+    out="$HOME/sysinfo-${host}-${stamp}.txt"
+  else
+    out="/tmp/sysinfo-${host}-${stamp}.txt"
+  fi
+fi
+
+mkdir -p "$(dirname -- "$out")"
+
+{
+  echo "=== host / time ==="
+  hostname
+  date -Is
+  echo
+  echo "=== uname -a ==="
+  uname -a
+  echo
+  echo "=== /etc/os-release ==="
+  if [[ -r /etc/os-release ]]; then
+    cat /etc/os-release
+  else
+    echo "(missing /etc/os-release)"
+  fi
+  echo
+  echo "=== findmnt / ==="
+  findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint / || true
+  echo
+  echo "=== findmnt /boot ==="
+  findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /boot || true
+  echo
+  echo "=== lsblk -f ==="
+  lsblk -f || true
+  echo
+  echo "=== df -h / /boot ==="
+  df -h / /boot || true
+  echo
+  echo "=== free -h ==="
+  free -h || true
+  echo
+  echo "=== saved to ==="
+  echo "$out"
+} 2>&1 | tee "$out"
+
+echo "Saved to $out" >&2

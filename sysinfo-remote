@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Pull sysinfo from GitHub on a remote host and store the report locally.
+set -euo pipefail
+
+PINNED_URL="${SYSINFO_URL:-https://raw.githubusercontent.com/skuthus/sysinfo/v1.0.0/sysinfo}"
+
+usage() {
+  echo "Usage: sysinfo-remote user@host [outfile]"
+  echo "Env:   SYSINFO_URL  override the script URL (default: pinned v1.0.0)"
+  exit 2
+}
+
+[[ $# -ge 1 ]] || usage
+[[ "$1" != "-h" && "$1" != "--help" ]] || usage
+
+host="$1"
+stamp="$(date +%Y%m%d-%H%M%S)"
+label="${host##*@}"
+outfile="${2:-$HOME/sysinfo-${label}-${stamp}.txt}"
+
+ssh -o BatchMode=yes "$host" "curl -fsSL '$PINNED_URL' | bash" | tee "$outfile"
+echo "Saved to $outfile" >&2
