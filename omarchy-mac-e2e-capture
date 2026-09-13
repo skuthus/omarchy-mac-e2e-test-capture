@@ -15,14 +15,14 @@ set -u
 
 usage() {
   cat <<'EOF'
-On a fresh Asahi Alarm box, as root, after nmtui:
+On a fresh Asahi Alarm box, as root, after nmtui, before Omarchy setup:
 
   curl -fsSL https://skuthus.github.io/e2e | bash
 
-That records the install, starts Omarchy Mac setup, and after you sign
-into Omarchy share:
+Curl once. Answer setup questions, let it reboot, sign into Omarchy.
+Share:  ~/omarchy-mac-e2e/REPORT.md
 
-  ~/omarchy-mac-e2e/REPORT.md
+Full sequence: https://github.com/skuthus/omarchy-mac-e2e-test-capture
 
 If DNS is broken:
 
@@ -915,7 +915,7 @@ EOF
     echo "===== omarchy-mac e2e bundle ====="
     echo "bundle=$dest"
     echo
-    find "$dest" -type f ! -name COMBINED.txt | sort | while IFS= read -r f; do
+    find "$dest" -type f ! -name COMBINED.txt ! -name REPORT.md | sort | while IFS= read -r f; do
       echo "########## ${f#"$dest"/} ##########"
       cat "$f"
       echo
