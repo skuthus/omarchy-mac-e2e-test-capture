@@ -20,18 +20,18 @@ On a fresh Asahi Alarm box, as root, after nmtui, before Omarchy setup:
   curl -fsSL https://skuthus.github.io/e2e | bash
 
 Curl once. Answer setup questions and the disk passphrase.
-Desktop probes, one extra reboot, and REPORT.md are automatic.
-Share:  ~/omarchy-mac-e2e/REPORT.md
+Desktop probes, one extra reboot, then a final snapshot.
+Share after that:  ~/omarchy-mac-e2e/REPORT.md
+
+Already installed:
+
+  sudo bash -c 'curl -fsSL https://skuthus.github.io/e2e | bash -s -- final'
 
 Full sequence: https://github.com/skuthus/omarchy-mac-e2e-test-capture
 
 If DNS is broken:
 
   curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e | bash
-
-On an already-installed machine:
-
-  sudo bash -c 'curl -fsSL https://skuthus.github.io/e2e | bash -s -- final'
 
 Advanced phases (usually unneeded): macos asahi start desktop persistence fail auto wrap
 EOF
