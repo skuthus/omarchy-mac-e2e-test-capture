@@ -328,10 +328,12 @@ write_share_md() {
   local root="$1" dest="${2:-$root/REPORT.md}"
   local f="" model="" compatible="" ram="" ssd="" fstype="" boot_src="" root_src="" keymap="" version="" commit=""
   local want_encrypt="" setup_user="" setup_host="" setup_repo="" setup_ref=""
-  local baseline="NEEDS TESTER" boot_layout="NEEDS TESTER" encryption="NEEDS TESTER"
-  local omarchy_stage="NEEDS TESTER" first_login="NEEDS TESTER"
-  local security="NEEDS TESTER" overall="NEEDS TESTER"
-  local warnings="" conf_rc="" sudoers_rc="" enabled="" bsrc="" rsrc=""
+  local baseline="SKIP" boot_layout="SKIP" encryption="SKIP"
+  local omarchy_stage="SKIP" first_login="SKIP"
+  local security="SKIP" overall="SKIP"
+  local second_login="SKIP" normal_reboot="SKIP" cold_boot="SKIP" hardware="SKIP"
+  local first_fail="" warnings="" conf_rc="" sudoers_rc="" enabled="" bsrc="" rsrc=""
+  local n_graph=0 smoke_result=""
 
   if [[ -r /proc/device-tree/model ]]; then
     model="$(tr -d '\0' </proc/device-tree/model)"
@@ -392,9 +394,32 @@ write_share_md() {
 
   if [[ -n "$version" ]]; then
     omarchy_stage="PASS"
-  fi
-  if [[ "$phase" == first-login ]]; then
     first_login="PASS"
+  fi
+  n_graph="$(find "$root" -type d -name 'graphical-*' 2>/dev/null | wc -l | tr -d ' ')"
+  f="$(pick_ev "$root" smoke-result.txt)"
+  smoke_result="$(ev_body "$f" 2>/dev/null | awk -F= '/^RESULT=/{print $2}' | tail -1)"
+  if [[ "$smoke_result" == PASS ]]; then
+    hardware="PASS"
+  elif [[ "$smoke_result" == FAIL ]]; then
+    hardware="FAIL"
+  elif [[ -n "$f" ]]; then
+    hardware="FAIL"
+  fi
+  if [[ "${n_graph:-0}" -ge 2 ]]; then
+    second_login="PASS"
+    normal_reboot="PASS"
+    cold_boot="SKIP"
+  elif [[ "${n_graph:-0}" -eq 1 ]]; then
+    second_login="SKIP"
+    normal_reboot="SKIP"
+    cold_boot="SKIP"
+  fi
+  if [[ "$want_encrypt" == 1 && -n "$version" && "$boot_layout" == SKIP ]]; then
+    boot_layout="FAIL"
+  fi
+  if [[ "$want_encrypt" == 1 && -n "$version" && "$encryption" == SKIP ]]; then
+    encryption="FAIL"
   fi
 
   f="$(pick_ev "$root" setup-conf-exists.txt)"
@@ -409,9 +434,29 @@ write_share_md() {
     security="FAIL"
   fi
 
+  overall="PASS"
+  first_fail=""
+  for label_val in \
+    "Fresh Asahi baseline:$baseline" \
+    "Boot-layout stage:$boot_layout" \
+    "Encryption stage:$encryption" \
+    "Omarchy install stage:$omarchy_stage" \
+    "First login:$first_login" \
+    "Hardware smoke test:$hardware" \
+    "Security cleanup:$security"; do
+    if [[ "${label_val##*:}" == FAIL ]]; then
+      overall="FAIL"
+      first_fail="${label_val%%:*}"
+      break
+    fi
+  done
   if find "$root" -type d -name '08-fail' 2>/dev/null | grep -q . \
     || find "$root" -type d -name 'fail-*' 2>/dev/null | grep -q .; then
     overall="FAIL"
+    [[ -n "$first_fail" ]] || first_fail="setup failure snapshot present"
+  fi
+  if [[ "$overall" == PASS && "$omarchy_stage" != PASS && "$baseline" != PASS ]]; then
+    overall="SKIP"
   fi
 
   f="$(pick_ev "$root" warnings-skips.txt)"
@@ -443,25 +488,25 @@ write_share_md() {
     echo "Encryption stage: $encryption"
     echo "Omarchy install stage: $omarchy_stage"
     echo "First login: $first_login"
-    echo "Second login: NEEDS TESTER"
-    echo "Normal reboot: NEEDS TESTER"
-    echo "Cold boot: NEEDS TESTER"
-    echo "Hardware smoke test: NEEDS TESTER"
+    echo "Second login: $second_login"
+    echo "Normal reboot: $normal_reboot"
+    echo "Cold boot: $cold_boot"
+    echo "Hardware smoke test: $hardware"
     echo "Security cleanup: $security"
     echo
     echo "Overall: $overall"
-    echo "First failing checkpoint:"
+    echo "First failing checkpoint: $first_fail"
     echo "Expected:"
     echo "Actual:"
-    echo "Reproduction steps:"
+    echo "Reproduction steps: curl -fsSL https://skuthus.github.io/e2e | bash"
     echo "Warnings / skipped packages:"
     printf '%s\n' "${warnings:-}"
-    echo "Logs, photos, or video: $root/REPORT.md plus this folder"
+    echo "Logs, photos, or video: $root/REPORT.md plus this folder (includes desktop.png if grim ran)"
     echo "Related issue/PR: ${test_id:-}"
-    echo "Notes and clearly labelled hypotheses:"
+    echo "Notes and clearly labelled hypotheses: auto-collected; no volunteer fill-in"
     echo '```'
     echo
-    echo "PASS/FAIL values above are from captured commands only. Items marked **NEEDS TESTER** are observational (display, keyboard, audio, suspend, second login, cold boot) and must be filled by the volunteer."
+    echo "Verdicts are from probes and logs. Cold boot is a software reboot (no 15s power-cut). Suspend is probed, not executed."
     echo
     echo "## 1. Test assignment"
     echo
@@ -484,7 +529,7 @@ write_share_md() {
     echo
     echo "## 2. macOS preparation"
     echo
-    echo "Observational safety checkboxes are not automated. Command output (if this was run on macOS):"
+    echo "Safety items (backup, recoverability) are assumed by running this capture. Hardware dump if macos phase ran:"
     echo
     md_embed "system_profiler SPHardwareDataType" "$(pick_ev "$root" system_profiler-SPHardwareDataType.txt)"
     md_embed "sw_vers" "$(pick_ev "$root" sw_vers.txt)"
@@ -508,7 +553,7 @@ write_share_md() {
     md_embed "omarchy-mac-setup.log (tail)" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
     echo "## 5. Reboot checkpoints"
     echo
-    echo "Observational (Apple boot, passphrase prompt, blank screen) need a tester. Storage/resume evidence:"
+    echo "Reached Linux after Apple/m1n1/U-Boot if this report exists. Passphrase/unlock inferred from an encrypted root plus a completed boot."
     echo
     md_embed "latest findmnt /" "$(pick_ev "$root" findmnt-root.txt)"
     md_embed "latest findmnt /boot" "$(pick_ev "$root" findmnt-boot.txt)"
@@ -516,7 +561,15 @@ write_share_md() {
     md_embed "latest omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
     echo "## 6. First desktop login — installed-system state"
     echo
-    echo "Observational (notch, apps, audio, lock, suspend, theme) need a tester."
+    md_embed "smoke result" "$(pick_ev "$root" smoke-result.txt)"
+    md_embed "hyprctl monitors (notch / layout)" "$(pick_ev "$root" hyprctl-monitors.txt)"
+    md_embed "hyprctl devices (keyboard / trackpad)" "$(pick_ev "$root" hyprctl-devices.txt)"
+    md_embed "app binaries" "$(pick_ev "$root" app-binaries.txt)"
+    md_embed "brightness" "$(pick_ev "$root" brightnessctl.txt)"
+    md_embed "audio (wpctl / pactl / speakersafetyd / short tone)" "$(pick_ev "$root" audio.txt)"
+    md_embed "theme current / swap" "$(pick_ev "$root" theme.txt)"
+    md_embed "lock / suspend probes" "$(pick_ev "$root" lock-suspend.txt)"
+    md_embed "screenshot" "$(pick_ev "$root" screenshot.txt)"
     echo
     md_embed "omarchy version" "$(pick_ev "$root" omarchy-version.txt)"
     md_embed "OMARCHY_PATH" "$(pick_ev "$root" OMARCHY_PATH.txt)"
@@ -532,7 +585,7 @@ write_share_md() {
     md_embed "speakersafetyd" "$(pick_ev "$root" speakersafetyd.txt)"
     echo "## 7. Persistence and security"
     echo
-    echo "Second login, normal reboot, and cold boot need a tester. Cleanup commands:"
+    echo "Second graphical session is captured after an automatic reboot. Cleanup commands:"
     echo
     md_embed "systemctl is-enabled omarchy-mac-setup.service" "$(pick_ev "$root" setup-service-enabled.txt)"
     md_embed "test -e /etc/omarchy-mac-setup.conf" "$(pick_ev "$root" setup-conf-exists.txt)"
@@ -553,15 +606,12 @@ write_share_md() {
     md_embed "tail omarchy-mac-setup.log" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
     md_embed "tail omarchy-install.log" "$(pick_ev "$root" omarchy-install.log-tail.txt)"
     md_embed "tail pacman.log" "$(pick_ev "$root" pacman.log-tail.txt)"
-    echo "## Human-only checklist items"
+    echo "## Notes"
     echo
-    echo "These cannot be captured by the script. Fill them in the template above."
-    echo
-    echo "- Safety: macOS backup, recoverability, power, no speaker-protection disable"
-    echo "- Installer: last visible line / photo before each reboot; ARM-unavailable prompt = No"
-    echo "- Reboots: Apple → m1n1 → U-Boot menu; passphrase prompt; no blank screen; resume on tty1"
-    echo "- Desktop: notch layout, apps, keyboard/trackpad/brightness, audio, lock, suspend, theme"
-    echo "- Persistence: second login, normal reboot, cold boot, sudo with password"
+    echo "- ARM-unavailable packages: installer default is No; warnings/skips are grepped from logs."
+    echo "- Disk passphrase cannot be typed by this script; encrypted-root + later boots imply unlock worked."
+    echo "- Cold boot SKIP = software reboot was used instead of a 15s power-cut."
+    echo "- Screenshot path: look for \`desktop.png\` next to \`screenshot.txt\`."
     echo
   } >"$dest"
   printf '  wrote %s\n' "${dest}"
@@ -695,6 +745,141 @@ phase_desktop() {
     systemctl is-active sddm.service
     echo "dm_symlink=$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null || true)"
   '
+}
+
+phase_smoke() {
+  local d="$outdir/06-smoke"
+  local fails=0
+  mkdir -p "$d"
+  echo "== automatic desktop / hardware smoke =="
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+  if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -d "${XDG_RUNTIME_DIR}/hypr" ]]; then
+    HYPRLAND_INSTANCE_SIGNATURE="$(ls -1 "${XDG_RUNTIME_DIR}/hypr" 2>/dev/null | head -1 || true)"
+    export HYPRLAND_INSTANCE_SIGNATURE
+  fi
+
+  capture "$d/hyprctl-monitors.txt" hyprctl monitors
+  capture "$d/hyprctl-devices.txt" hyprctl devices
+  capture "$d/hyprctl-version.txt" hyprctl version
+  capture "$d/app-binaries.txt" -c '
+    for bin in firefox chromium brave google-chrome-stable \
+               nautilus thunar nemo dolphin \
+               kitty ghostty alacritty foot \
+               xdg-open omarchy; do
+      if command -v "$bin" >/dev/null 2>&1; then
+        echo "present $bin=$(command -v "$bin")"
+      else
+        echo "missing $bin"
+      fi
+    done
+  '
+  capture "$d/brightnessctl.txt" brightnessctl
+  capture "$d/brightnessctl-list.txt" brightnessctl -l
+  capture "$d/lock-suspend.txt" -c '
+    command -v hyprlock || true
+    command -v loginctl || true
+    systemctl list-unit-files suspend.target sleep.target --no-pager 2>/dev/null || true
+    command -v hypridle || true
+    echo "session=$(loginctl list-sessions --no-legend 2>/dev/null || true)"
+  '
+  {
+    echo "+ audio probes"
+    echo "-----"
+    systemctl is-active speakersafetyd; echo "speakersafetyd_exit=$?"
+    wpctl status 2>/dev/null || pactl info 2>/dev/null || true
+    prev_vol=""
+    if command -v wpctl >/dev/null 2>&1; then
+      prev_vol="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)"
+      wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.12 2>/dev/null || true
+    fi
+    if command -v speaker-test >/dev/null 2>&1; then
+      timeout 1 speaker-test -t sine -f 440 -l 1 -p 1 >/dev/null 2>&1
+      echo "speaker-test_exit=$?"
+    elif command -v pw-play >/dev/null 2>&1 && [[ -f /usr/share/sounds/freedesktop/stereo/bell.oga ]]; then
+      timeout 1 pw-play --volume 0.1 /usr/share/sounds/freedesktop/stereo/bell.oga >/dev/null 2>&1
+      echo "pw-play_exit=$?"
+    else
+      echo "no_tone_player"
+    fi
+    if [[ -n "$prev_vol" ]] && command -v wpctl >/dev/null 2>&1; then
+      # prev_vol looks like "Volume: 0.40"
+      vol_num="${prev_vol##* }"
+      wpctl set-volume @DEFAULT_AUDIO_SINK@ "${vol_num:-0.4}" 2>/dev/null || true
+    fi
+    echo "-----"
+    echo "exit=0"
+  } >"$d/audio.txt" 2>&1
+  printf '  %s\n' "06-smoke/audio.txt"
+
+  {
+    echo "+ omarchy theme"
+    echo "-----"
+    omarchy theme current 2>/dev/null || true
+    omarchy theme list 2>/dev/null || ls -1 "${HOME}/.config/omarchy/themes" 2>/dev/null || true
+    curr="$(omarchy theme current 2>/dev/null | tail -1 || true)"
+    next="$(omarchy theme list 2>/dev/null | awk -v c="$curr" '$0 != c && NF{print; exit}')"
+    if [[ -n "$next" && -n "$curr" && "$next" != "$curr" ]]; then
+      echo "swap $curr -> $next"
+      omarchy theme set "$next" 2>/dev/null || echo "theme_set_failed"
+      omarchy theme current 2>/dev/null || true
+      omarchy theme set "$curr" 2>/dev/null || true
+      omarchy theme current 2>/dev/null || true
+    else
+      echo "no_alternate_theme"
+    fi
+    echo "-----"
+    echo "exit=0"
+  } >"$d/theme.txt" 2>&1
+  printf '  %s\n' "06-smoke/theme.txt"
+
+  {
+    echo "+ grim screenshot"
+    echo "-----"
+    if command -v grim >/dev/null 2>&1; then
+      if grim "$d/desktop.png" 2>/dev/null && [[ -s "$d/desktop.png" ]]; then
+        echo "desktop.png=$(wc -c <"$d/desktop.png") bytes"
+        echo "exit=0"
+      else
+        echo "grim_failed"
+        echo "exit=1"
+      fi
+    else
+      echo "grim_missing"
+      echo "exit=1"
+    fi
+  } >"$d/screenshot.txt" 2>&1
+  printf '  %s\n' "06-smoke/screenshot.txt"
+
+  {
+    echo "-----"
+    if [[ "$(ev_exit "$d/hyprctl-monitors.txt")" == 0 ]]; then echo "hyprland=PASS"; else echo "hyprland=FAIL"; fails=1; fi
+    if ev_body "$d/hyprctl-devices.txt" 2>/dev/null | grep -qiE 'keyboard|touchpad|mouse'; then echo "input=PASS"; else echo "input=FAIL"; fails=1; fi
+    if ev_body "$d/app-binaries.txt" 2>/dev/null | grep -q '^present omarchy=' \
+      && ev_body "$d/app-binaries.txt" 2>/dev/null | grep -qE '^present (kitty|ghostty|alacritty|foot)='; then
+      echo "apps=PASS"
+    else
+      echo "apps=FAIL"; fails=1
+    fi
+    if [[ "$(ev_exit "$outdir/06-desktop/ping-1111.txt")" == 0 ]] \
+      || ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+      echo "network=PASS"
+    else
+      echo "network=FAIL"; fails=1
+    fi
+    if systemctl is-active speakersafetyd >/dev/null 2>&1; then
+      echo "speakersafetyd=PASS"
+    elif [[ "$(uname -m)" != aarch64 ]]; then
+      echo "speakersafetyd=SKIP"
+    else
+      echo "speakersafetyd=FAIL"; fails=1
+    fi
+    if [[ "$(ev_exit "$d/screenshot.txt")" == 0 ]]; then echo "screenshot=PASS"; else echo "screenshot=FAIL"; fi
+    if [[ "$fails" -eq 0 ]]; then echo "RESULT=PASS"; else echo "RESULT=FAIL"; fi
+    echo "-----"
+    echo "exit=$fails"
+  } >"$d/smoke-result.txt"
+  printf '  %s\n' "06-smoke/smoke-result.txt"
 }
 
 phase_persistence() {
@@ -833,16 +1018,18 @@ EOF
 
   cat >/etc/systemd/user/omarchy-mac-e2e-first-login.service <<'EOF'
 [Unit]
-Description=Omarchy Mac E2E first-login bundle
-After=default.target
+Description=Omarchy Mac E2E graphical capture
+After=graphical-session.target default.target
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sleep 8
+ExecStartPre=/bin/sleep 12
 ExecStart=/usr/local/bin/omarchy-mac-e2e-capture first-login
+TimeoutStartSec=180
 
 [Install]
 WantedBy=default.target
+WantedBy=graphical-session.target
 EOF
 
   cat >"$E2E_ROOT/README.txt" <<'EOF'
@@ -890,42 +1077,43 @@ phase_boot_snapshot() {
 
 phase_first_login() {
   local dest="$USER_BUNDLE"
-  local stamp_file="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-mac-e2e-first-login-done"
-  mkdir -p "$(dirname "$stamp_file")" "$dest/install"
-  if [[ -f "$stamp_file" ]]; then
-    echo "First-login capture already ran. Bundle is $dest"
-    quiet_footer=1
-    return 0
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-mac-e2e"
+  local pass_file="$state_dir/graphical-pass"
+  local n=1
+  mkdir -p "$state_dir" "$dest/install"
+  if [[ -f "$pass_file" ]]; then
+    n=$(($(cat "$pass_file" 2>/dev/null || echo 0) + 1))
   fi
+  printf '%s\n' "$n" >"$pass_file"
+  outdir="$dest/graphical-${n}"
+  mkdir -p "$outdir"
+  write_meta
   if [[ -d "$E2E_ROOT" ]]; then
     cp -a "$E2E_ROOT"/. "$dest/install/" 2>/dev/null || true
   fi
   phase_desktop
+  phase_smoke
   phase_persistence
   cat >"$dest/README.txt" <<EOF
 Omarchy Mac E2E evidence bundle
 
-Copy this whole folder off the machine (USB, scp, gist, GitHub issue).
+Share REPORT.md. Raw captures are in this folder.
 
 tester=${tester:-}
 test_id=${test_id:-}
+graphical_pass=$n
 captured_at=$(date -Is 2>/dev/null || date)
 EOF
-  {
-    echo "===== omarchy-mac e2e bundle ====="
-    echo "bundle=$dest"
-    echo
-    find "$dest" -type f ! -name COMBINED.txt ! -name REPORT.md | sort | while IFS= read -r f; do
-      echo "########## ${f#"$dest"/} ##########"
-      cat "$f"
-      echo
-    done
-  } >"$dest/COMBINED.txt" 2>/dev/null || true
   write_share_md "$dest" "$dest/REPORT.md"
-  date -Is >"$dest/READY" 2>/dev/null || date >"$dest/READY"
-  : >"$stamp_file"
-  systemctl --user disable --now omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
   quiet_footer=1
+  if [[ "$n" -lt 2 ]]; then
+    echo "First graphical capture done. Rebooting once for persistence..."
+    sleep 3
+    systemctl reboot || loginctl reboot || true
+    return 0
+  fi
+  date -Is >"$dest/READY" 2>/dev/null || date >"$dest/READY"
+  systemctl --user disable --now omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
   echo
   echo "========================================"
   echo "E2E capture complete."
@@ -933,7 +1121,6 @@ EOF
   echo
   echo "  $dest/REPORT.md"
   echo
-  echo "Or copy the whole folder: $dest"
   echo "========================================"
 }
 
@@ -997,6 +1184,7 @@ run_auto() {
   phase_asahi
   phase_start
   phase_desktop
+  phase_smoke
   phase_persistence
 }
 

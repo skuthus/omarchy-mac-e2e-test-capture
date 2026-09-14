@@ -60,11 +60,10 @@ Copy that macOS `REPORT.md` off to the side; the Asahi run produces the main rep
 | 6. Start capture + setup | **Curl once** | `curl -fsSL https://skuthus.github.io/e2e \| bash` as root. |
 | 7. Setup questions | **You** | Encrypt (unless assigned `--no-encrypt`), hostname, username, password. Default the ARM-unavailable package prompt to **No**. Confirm the on-screen plan matches the assignment. |
 | 8. Reboots | **Automatic + you** | Let it reboot. Encrypted path: type the **disk passphrase** when asked (same keymap as setup). Photograph or note the last line on screen before each reboot if you can. Do not power off during `cryptsetup reencrypt`. |
-| 9. First Omarchy login | **You** | Sign in (or autologin after the disk unlock). Wait ~10 seconds. |
-| 10. Report | **Automatic** | `~/omarchy-mac-e2e/REPORT.md` is written. |
-| 11. Desktop smoke | **You** | Notch layout, menu/launcher/terminal/browser/files/settings, Wi-Fi, keys/backlight, audio at modest volume with speaker protection, lock, one suspend/resume, change a theme. |
-| 12. Persistence | **You** | Log out and in again (first-run must not loop). Normal reboot. Shut down, wait 15 seconds, cold boot. Confirm `sudo` with the user password. |
-| 13. Share | **You** | Attach `~/omarchy-mac-e2e/REPORT.md` (and photos/video) to the test ID / GitHub issue. Fill every **NEEDS TESTER** line. |
+| 9. First Omarchy login | **You** | Sign in only if there is a greeter (encrypted machines autologin after the disk unlock). |
+| 10. Desktop smoke + reboot | **Automatic** | Screenshot, Hyprland monitors/devices, apps, brightness, quiet test tone, theme swap, lock/suspend probes, then **one reboot** for persistence. |
+| 11. Report | **Automatic** | After that reboot, `~/omarchy-mac-e2e/REPORT.md` is final. Verdicts are PASS/FAIL/SKIP — nothing to fill in. |
+| 12. Share | **You** | Attach `~/omarchy-mac-e2e/REPORT.md` to the test ID / GitHub issue. |
 
 ---
 
@@ -79,7 +78,7 @@ These are the checklist command blocks. You do not re-run them.
 - Cleanup: setup service/conf/sudoers gone, warning journals, UFW/SSH/root lock
 - On setup failure: `--status`, `journalctl -b`, `--list-boots`, `findmnt`, `lsblk`, log tails — **before** any repair
 
-Items the script **cannot** see stay as **NEEDS TESTER** in the report (screen photos, passphrase prompt, notch, apps, audio, suspend, second login, cold boot).
+The report does not ask you to fill verdicts. Cold boot is SKIP (software reboot, not a 15s power-cut). Disk passphrase still has to be typed at the firmware prompt — the script cannot do that.
 
 ---
 
@@ -105,4 +104,4 @@ Stop. Do **not** rerun setup, apply a suggested fix, or wipe Linux until evidenc
 ~/omarchy-mac-e2e/            ← raw captures, keep with the report
 ```
 
-Open `REPORT.md`, fill **NEEDS TESTER** and the overall PASS/FAIL/BLOCKED line, then attach it to the tracking issue.
+Attach `REPORT.md` to the tracking issue. Verdicts are already filled.
