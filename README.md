@@ -82,7 +82,15 @@ Stop. Do not rerun setup, “fix” storage, or wipe Linux until the report is s
 If a shell is reachable and there is no report yet:
 
 ```bash
-curl -fsSL https://skuthus.github.io/e2e | bash -s -- fail
+curl -fsSL https://skuthus.github.io/e2e | sudo bash -s -- fail
 ```
+
+On a machine that already finished install (backfill the post-Omarchy snapshot):
+
+```bash
+sudo bash -c 'curl -fsSL https://skuthus.github.io/e2e | bash -s -- final'
+```
+
+That must be **root**. `curl | bash` as your desktop user cannot create `/var/lib/omarchy-mac-e2e/final`.
 
 Then share `REPORT.md` (under `~/omarchy-mac-e2e/` or `/var/lib/omarchy-mac-e2e/`).

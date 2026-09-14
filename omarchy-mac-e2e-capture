@@ -29,6 +29,10 @@ If DNS is broken:
 
   curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e | bash
 
+On an already-installed machine, as root:
+
+  curl -fsSL https://skuthus.github.io/e2e | sudo bash -s -- final
+
 Advanced phases (usually unneeded): macos asahi start desktop persistence fail auto wrap
 EOF
 }
@@ -142,13 +146,19 @@ if [[ -z "$outdir" ]]; then
     esac
   fi
 fi
-if ! mkdir -p "$outdir" 2>/dev/null; then
-  if [[ "$phase" == run && "${EUID:-1}" -ne 0 ]]; then
-    echo "e2e-capture: run as root on fresh Asahi:" >&2
-    echo "  curl -fsSL https://skuthus.github.io/e2e | bash" >&2
-    exit 1
-  fi
+needs_root=0
+case "$phase" in
+  run|boot-snapshot|final) needs_root=1 ;;
+esac
+if [[ "$needs_root" -eq 1 && "${EUID:-1}" -ne 0 ]]; then
+  echo "e2e-capture: '$phase' must run as root (needs $outdir)." >&2
+  echo "Run the whole pipeline as root (sudo password on the tty, not the pipe):" >&2
+  echo "  sudo bash -c 'curl -fsSL https://skuthus.github.io/e2e | bash -s -- $phase'" >&2
+  exit 1
+fi
+if ! mkdir -p "$outdir"; then
   echo "e2e-capture: cannot create $outdir" >&2
+  ls -ld "$(dirname "$outdir")" "$outdir" 2>&1 || true
   exit 1
 fi
 
