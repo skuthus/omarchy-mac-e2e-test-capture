@@ -1,30 +1,24 @@
 # Omarchy Mac E2E test capture
 
-Volunteer helper for a fresh Omarchy Mac install. You **curl once** on Asahi. The script records the checklist command output through setup, then writes a markdown report after first Omarchy login.
+One curl on a fresh Asahi box. Setup and install run as usual. After Omarchy comes up, the script probes the desktop, reboots once, and writes a finished report.
 
-Share this file when you are done:
+Share this file:
 
 ```
 ~/omarchy-mac-e2e/REPORT.md
 ```
 
-Use the volunteer E2E checklist you were assigned. A successful `install.sh` is not an E2E pass.
+Do not fill verdicts. They are already PASS / FAIL / SKIP.
 
-## When to curl (once)
+## Curl once
 
-**Where:** the fresh Asahi Alarm install, logged in as **root**.  
-**When:** after `nmtui` has a working network, **before** Omarchy setup.  
-**Do not** curl again after every reboot. Boot snapshots and the first-login report are automatic.
+**Where:** fresh Asahi Alarm, logged in as **root**.  
+**When:** after `nmtui` has network, **before** any Omarchy setup.  
+**Do not** curl again after reboots.
 
 ```bash
 curl -fsSL https://skuthus.github.io/e2e | bash
 ```
-
-That command:
-
-1. Records the fresh Asahi baseline (`uname`, mounts, disk, memory, …)
-2. Installs background capture across reboots
-3. Starts **Omarchy Mac setup** (same guided install as usual)
 
 If DNS cannot resolve GitHub:
 
@@ -32,76 +26,62 @@ If DNS cannot resolve GitHub:
 curl -fsSL --doh-url https://1.1.1.1/dns-query https://skuthus.github.io/e2e | bash
 ```
 
-Assigned `--no-encrypt` test:
+`--no-encrypt` assignment:
 
 ```bash
 curl -fsSL https://skuthus.github.io/e2e | bash -s -- --no-encrypt
 ```
 
-Optional, **from macOS**, before the Asahi installer (section 2 hardware dump):
+Optional, from **macOS** before the Asahi installer (hardware dump):
 
 ```bash
 curl -fsSL https://skuthus.github.io/e2e | bash -s -- macos
 ```
 
-Copy that macOS `REPORT.md` off to the side; the Asahi run produces the main report.
-
 ---
 
-## Process: curl vs you
+## What you do vs what is automatic
 
-| Step | Who | What you do |
+| Step | Who | What happens |
 |---|---|---|
-| 1. Assignment | **You** | Fill tester, test ID, Mac model, image (Minimal BTRFS), encrypt vs `--no-encrypt`, keymap, network. Do this before anyone else takes the same case. |
-| 2. Safety | **You** | macOS backup, ≥50 GB Linux (100 GB preferred), power + internet. Do not disable `speakersafetyd`. Do not run ad-hoc partition/encryption/bootloader repairs before collecting evidence. |
-| 3. macOS dump (optional) | **Curl** | `bash -s -- macos` on macOS: `system_profiler`, `sw_vers`, `diskutil list`. |
-| 4. Install Asahi Alarm | **You** | From macOS, install the assigned image (primary: **Minimal BTRFS**). Record the image name and Linux size. |
-| 5. First Asahi boot | **You** | Boot the **untouched** Asahi install. Log in as `root` / `root`. Run `nmtui`, connect Wi-Fi. Confirm display, keyboard/trackpad, DNS, and clock. **Do not** start Omarchy yet. |
-| 6. Start capture + setup | **Curl once** | `curl -fsSL https://skuthus.github.io/e2e \| bash` as root. |
-| 7. Setup questions | **You** | Encrypt (unless assigned `--no-encrypt`), hostname, username, password. Default the ARM-unavailable package prompt to **No**. Confirm the on-screen plan matches the assignment. |
-| 8. Reboots | **Automatic + you** | Let it reboot. Encrypted path: type the **disk passphrase** when asked (same keymap as setup). Photograph or note the last line on screen before each reboot if you can. Do not power off during `cryptsetup reencrypt`. |
-| 9. First Omarchy login | **You** | Sign in only if there is a greeter (encrypted machines autologin after the disk unlock). |
-| 10. Desktop smoke + reboot | **Automatic** | Screenshot, Hyprland monitors/devices, apps, brightness, quiet test tone, theme swap, lock/suspend probes, then **one reboot** for persistence. |
-| 11. Report | **Automatic** | After that reboot, `~/omarchy-mac-e2e/REPORT.md` is final. Verdicts are PASS/FAIL/SKIP — nothing to fill in. |
-| 12. Share | **You** | Attach `~/omarchy-mac-e2e/REPORT.md` to the test ID / GitHub issue. |
+| Backup, ≥50 GB Linux, power, internet | **You** | Do this in macOS. Do not disable `speakersafetyd`. |
+| Install Asahi Alarm Minimal BTRFS | **You** | From macOS. Then boot the **untouched** Asahi image. |
+| `nmtui` as `root` / `root` | **You** | Get Wi-Fi up. Do not start Omarchy yet. |
+| `curl …/e2e \| bash` | **You, once** | Records the Asahi baseline, hooks capture across reboots, starts guided setup. |
+| Setup questions | **You** | Encrypt (unless `--no-encrypt`), hostname, username, password. Leave ARM-unavailable packages at **No**. |
+| Setup reboots | **Automatic** | Let it reboot. Encrypted path: type the **disk passphrase** when asked. Do not power off during encryption. |
+| First Omarchy session | **Mostly automatic** | Encrypted machines autologin after unlock. If you see a greeter, sign in. |
+| Desktop probes | **Automatic** | Screenshot, Hyprland monitors/devices, apps, brightness, quiet test tone, theme swap, lock/suspend units, checklist command dumps. |
+| Persistence reboot | **Automatic** | The machine reboots once. After it comes back, capture runs again. |
+| Report | **Automatic** | `~/omarchy-mac-e2e/REPORT.md` is complete. |
+| Share | **You** | Attach that markdown to the test ID / GitHub issue. |
+
+You never re-run the checklist commands. You never fill **NEEDS TESTER**.
 
 ---
 
-## What the curl records for you
+## What the report already contains
 
-These are the checklist command blocks. You do not re-run them.
+- Fresh Asahi: `uname`, `os-release`, `findmnt` `/` and `/boot`, `lsblk`, `df`, `free`
+- Setup: command, repo/ref, `omarchy-mac-setup --status`, conf, warnings/skips, log tails
+- Reboots: whether `/boot` moved, whether root is encrypted
+- Desktop: `omarchy version`, packages, failed units, migrations, `omarchy-done`, screenshot, input, apps, audio, theme
+- Cleanup: setup service/conf/sudoers gone, journals, UFW, SSH, root lock
+- On failure: `--status`, `journalctl -b`, boots, `findmnt`, `lsblk`, log tails
 
-- Fresh Asahi: `uname -a`, `/etc/os-release`, `findmnt` `/` and `/boot`, `lsblk -f`, `df -h / /boot`, `free -h`
-- Setup: command, repo/ref, start time, `omarchy-mac-setup --status`, setup conf, warnings/skips, log tails
-- After reboots: whether `/boot` moved, whether root is encrypted, setup `--status`
-- First login: `omarchy version`, `OMARCHY_PATH`, pacman, failed units, `omarchy-migrate --pending`, `omarchy-done`, `swapon`, findmnt
-- Cleanup: setup service/conf/sudoers gone, warning journals, UFW/SSH/root lock
-- On setup failure: `--status`, `journalctl -b`, `--list-boots`, `findmnt`, `lsblk`, log tails — **before** any repair
-
-The report does not ask you to fill verdicts. Cold boot is SKIP (software reboot, not a 15s power-cut). Disk passphrase still has to be typed at the firmware prompt — the script cannot do that.
-
----
-
-## If anything fails
-
-Stop. Do **not** rerun setup, apply a suggested fix, or wipe Linux until evidence is saved.
-
-1. Photograph the screen (last line, passphrase prompt, blank screen, GRUB).
-2. If a shell is reachable, the failure snapshot should already be under `~/omarchy-mac-e2e/` or `/var/lib/omarchy-mac-e2e/`. If not, as root:
-
-   ```bash
-   curl -fsSL https://skuthus.github.io/e2e | bash -s -- fail
-   ```
-
-3. Share `REPORT.md` plus photos. Label guesses as hypotheses.
+**Cold boot** is SKIP (software reboot, not a 15s power-cut).  
+**Disk passphrase** still has to be typed; the script cannot do that.
 
 ---
 
-## After you sign in
+## If it fails
 
-```
-~/omarchy-mac-e2e/REPORT.md   ← share this
-~/omarchy-mac-e2e/            ← raw captures, keep with the report
+Stop. Do not rerun setup, “fix” storage, or wipe Linux until the report is saved.
+
+If a shell is reachable and there is no report yet:
+
+```bash
+curl -fsSL https://skuthus.github.io/e2e | bash -s -- fail
 ```
 
-Attach `REPORT.md` to the tracking issue. Verdicts are already filled.
+Then share `REPORT.md` (under `~/omarchy-mac-e2e/` or `/var/lib/omarchy-mac-e2e/`).

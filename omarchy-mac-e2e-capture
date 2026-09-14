@@ -19,7 +19,8 @@ On a fresh Asahi Alarm box, as root, after nmtui, before Omarchy setup:
 
   curl -fsSL https://skuthus.github.io/e2e | bash
 
-Curl once. Answer setup questions, let it reboot, sign into Omarchy.
+Curl once. Answer setup questions and the disk passphrase.
+Desktop probes, one extra reboot, and REPORT.md are automatic.
 Share:  ~/omarchy-mac-e2e/REPORT.md
 
 Full sequence: https://github.com/skuthus/omarchy-mac-e2e-test-capture
