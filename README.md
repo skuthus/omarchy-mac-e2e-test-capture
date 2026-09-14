@@ -53,6 +53,7 @@ curl -fsSL https://skuthus.github.io/e2e | bash -s -- macos
 | First Omarchy session | **Mostly automatic** | Encrypted machines autologin after unlock. If you see a greeter, sign in. |
 | Desktop probes | **Automatic** | Screenshot, Hyprland monitors/devices, apps, brightness, quiet test tone, theme swap, lock/suspend units, checklist command dumps. |
 | Persistence reboot | **Automatic** | The machine reboots once. After it comes back, capture runs again. |
+| Final snapshot | **Automatic** | Root-only leftovers (`ufw`, `passwd -S root`, `journalctl --list-boots`, installed mounts). The report keeps the original Asahi baseline separate from post-install state. |
 | Report | **Automatic** | `~/omarchy-mac-e2e/REPORT.md` is complete. |
 | Share | **You** | Attach that markdown to the test ID / GitHub issue. |
 

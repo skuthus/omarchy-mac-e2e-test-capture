@@ -100,7 +100,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$phase" in
-  macos|asahi|start|pre|desktop|persistence|fail|auto|wrap|run|boot-snapshot|first-login) ;;
+  macos|asahi|start|pre|desktop|persistence|fail|auto|wrap|run|boot-snapshot|first-login|final) ;;
   *)
     echo "e2e-capture: unknown phase: $phase" >&2
     usage >&2
@@ -131,6 +131,7 @@ if [[ -z "$outdir" ]]; then
       boot-snapshot) outdir="$E2E_ROOT/boot-${stamp}" ;;
       first-login) outdir="$USER_BUNDLE/first-login" ;;
       fail) outdir="$E2E_ROOT/fail-${stamp}" ;;
+      final) outdir="$E2E_ROOT/final" ;;
       *)
         if [[ -n "${HOME:-}" && -w "${HOME}" ]]; then
           outdir="$HOME/omarchy-mac-e2e/${stamp}-${phase}"
@@ -296,6 +297,25 @@ pick_ev_first() {
   find "$root" -type f -name "$name" 2>/dev/null | sort | head -1
 }
 
+pick_baseline() {
+  local root="$1" name="$2" f=""
+  f="$(find "$root" -path '*/00-baseline/*' -name "$name" -type f 2>/dev/null | sort | head -1)"
+  if [[ -n "$f" ]]; then
+    printf '%s\n' "$f"
+  else
+    pick_ev_first "$root" "$name"
+  fi
+}
+
+pick_final() {
+  local root="$1" name="$2" f=""
+  f="$(find "$root" -path '*/final/*' -name "$name" -type f 2>/dev/null | sort | tail -1)"
+  [[ -n "$f" ]] && { printf '%s\n' "$f"; return; }
+  f="$(find "$root" -path '*/graphical-*/*' -name "$name" -type f 2>/dev/null | sort | tail -1)"
+  [[ -n "$f" ]] && { printf '%s\n' "$f"; return; }
+  pick_ev "$root" "$name"
+}
+
 ev_body() {
   local file="$1"
   [[ -f "$file" ]] || return 0
@@ -334,7 +354,7 @@ write_share_md() {
   local security="SKIP" overall="SKIP"
   local second_login="SKIP" normal_reboot="SKIP" cold_boot="SKIP" hardware="SKIP"
   local first_fail="" warnings="" conf_rc="" sudoers_rc="" enabled="" bsrc="" rsrc=""
-  local n_graph=0 smoke_result=""
+  local n_graph=0 smoke_result="" setup_conf_file=""
 
   if [[ -r /proc/device-tree/model ]]; then
     model="$(tr -d '\0' </proc/device-tree/model)"
@@ -343,7 +363,12 @@ write_share_md() {
     compatible="$(tr '\0' ' ' </proc/device-tree/compatible)"
   fi
   ram="$(awk '/MemTotal/{print $2, $3}' /proc/meminfo 2>/dev/null || true)"
-  f="$(pick_ev "$root" setup-conf.txt)"
+  [[ -n "$tester" ]] || tester="$(owner_user)"
+  f=""
+  [[ -f "$root/saved-setup.conf" ]] && f="$root/saved-setup.conf"
+  [[ -z "$f" && -f "$root/install/saved-setup.conf" ]] && f="$root/install/saved-setup.conf"
+  [[ -z "$f" ]] && f="$(pick_ev "$root" setup-conf.txt)"
+  setup_conf_file="$f"
   if [[ -f "$f" ]]; then
     want_encrypt="$(sed -n 's/^WANT_ENCRYPT=//p' "$f" | tail -1 | tr -d "'\"")"
     setup_user="$(sed -n 's/^SETUP_USER=//p' "$f" | tail -1 | tr -d "'\"")"
@@ -352,10 +377,20 @@ write_share_md() {
     setup_ref="$(sed -n 's/^SETUP_REF=//p' "$f" | tail -1 | tr -d "'\"")"
     keymap="$(sed -n 's/^SETUP_KEYMAP=//p' "$f" | tail -1 | tr -d "'\"")"
   fi
+  f="$(pick_final "$root" omarchy-mac-setup-status.txt)"
+  if [[ -f "$f" ]]; then
+    [[ -n "$setup_host" ]] || setup_host="$(ev_body "$f" | awk '/hostname/{print $2; exit}')"
+    if [[ -z "$want_encrypt" ]] && ev_body "$f" | grep -qi 'encrypted'; then
+      want_encrypt=1
+    fi
+    if ev_body "$f" | grep -qi 'encryption[[:space:]]*done'; then
+      want_encrypt="${want_encrypt:-1}"
+    fi
+  fi
   [[ -n "$keymap" ]] || keymap="$(awk -F= '/^KEYMAP=/{print $2}' /etc/vconsole.conf 2>/dev/null | tr -d '"' | tail -1)"
-  f="$(pick_ev "$root" findmnt-root.txt)"
+  f="$(pick_final "$root" findmnt-root.txt)"
   root_src="$(ev_body "$f" 2>/dev/null | tail -1)"
-  f="$(pick_ev "$root" findmnt-boot.txt)"
+  f="$(pick_final "$root" findmnt-boot.txt)"
   boot_src="$(ev_body "$f" 2>/dev/null | tail -1)"
   fstype="$(printf '%s\n' "$root_src" | awk '{print $3}')"
   f="$(pick_ev "$root" lsblk-size.txt)"
@@ -367,7 +402,7 @@ write_share_md() {
   [[ -n "$setup_repo" ]] || setup_repo="$repo"
   [[ -n "$setup_ref" ]] || setup_ref="$ref"
 
-  f="$(pick_ev_first "$root" uname-a.txt)"
+  f="$(pick_baseline "$root" uname-a.txt)"
   if [[ "$(ev_exit "$f")" == 0 ]]; then
     baseline="PASS"
   elif [[ -n "$f" ]]; then
@@ -378,9 +413,7 @@ write_share_md() {
     boot_layout="SKIP"
     encryption="SKIP"
   else
-    if [[ -n "$boot_src" && -n "$root_src" && "$boot_src" != "$root_src" ]] \
-      && printf '%s\n' "$boot_src" | grep -q . \
-      && ! printf '%s\n' "$boot_src" | grep -qi 'not captured\|missing\|error'; then
+    if [[ -n "$boot_src" && -n "$root_src" && "$boot_src" != "$root_src" ]]; then
       bsrc="$(printf '%s\n' "$boot_src" | awk '{print $2}')"
       rsrc="$(printf '%s\n' "$root_src" | awk '{print $2}')"
       if [[ -n "$bsrc" && -n "$rsrc" && "$bsrc" != "$rsrc" ]]; then
@@ -537,29 +570,31 @@ write_share_md() {
     md_embed "diskutil list" "$(pick_ev "$root" diskutil-list.txt)"
     echo "## 3. Fresh Asahi baseline"
     echo
-    md_embed "uname -a" "$(pick_ev_first "$root" uname-a.txt)"
-    md_embed "cat /etc/os-release" "$(pick_ev_first "$root" os-release.txt)"
-    md_embed "findmnt /" "$(pick_ev_first "$root" findmnt-root.txt)"
-    md_embed "findmnt /boot" "$(pick_ev_first "$root" findmnt-boot.txt)"
-    md_embed "lsblk -f" "$(pick_ev_first "$root" lsblk-f.txt)"
-    md_embed "df -h / /boot" "$(pick_ev_first "$root" df-h-root-boot.txt)"
-    md_embed "free -h" "$(pick_ev_first "$root" free-h.txt)"
-    md_embed "freshness (Omarchy not already installed)" "$(pick_ev_first "$root" freshness.txt)"
+    echo "From the first capture on untouched Asahi (00-baseline), not later install boots."
+    echo
+    md_embed "uname -a" "$(pick_baseline "$root" uname-a.txt)"
+    md_embed "cat /etc/os-release" "$(pick_baseline "$root" os-release.txt)"
+    md_embed "findmnt /" "$(pick_baseline "$root" findmnt-root.txt)"
+    md_embed "findmnt /boot" "$(pick_baseline "$root" findmnt-boot.txt)"
+    md_embed "lsblk -f" "$(pick_baseline "$root" lsblk-f.txt)"
+    md_embed "df -h / /boot" "$(pick_baseline "$root" df-h-root-boot.txt)"
+    md_embed "free -h" "$(pick_baseline "$root" free-h.txt)"
+    md_embed "freshness (Omarchy not already installed)" "$(pick_baseline "$root" freshness.txt)"
     echo "## 4. Guided installer"
     echo
-    md_embed "invocation (command, repo, ref, start time)" "$(pick_ev "$root" invocation.txt)"
-    md_embed "omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
-    md_embed "/etc/omarchy-mac-setup.conf (encryption, hostname, user, keymap, repo)" "$(pick_ev "$root" setup-conf.txt)"
+    md_embed "invocation (command, repo, ref, start time)" "$(pick_baseline "$root" invocation.txt)"
+    md_embed "omarchy-mac-setup --status" "$(pick_final "$root" omarchy-mac-setup-status.txt)"
+    md_embed "/etc/omarchy-mac-setup.conf (saved before cleanup)" "${setup_conf_file:-$(pick_final "$root" setup-conf.txt)}"
     md_embed "warnings / skipped / unavailable packages" "$(pick_ev "$root" warnings-skips.txt)"
     md_embed "omarchy-mac-setup.log (tail)" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
     echo "## 5. Reboot checkpoints"
     echo
     echo "Reached Linux after Apple/m1n1/U-Boot if this report exists. Passphrase/unlock inferred from an encrypted root plus a completed boot."
     echo
-    md_embed "latest findmnt /" "$(pick_ev "$root" findmnt-root.txt)"
-    md_embed "latest findmnt /boot" "$(pick_ev "$root" findmnt-boot.txt)"
-    md_embed "latest lsblk -f" "$(pick_ev "$root" lsblk-f.txt)"
-    md_embed "latest omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
+    md_embed "latest findmnt /" "$(pick_final "$root" findmnt-root.txt)"
+    md_embed "latest findmnt /boot" "$(pick_final "$root" findmnt-boot.txt)"
+    md_embed "latest lsblk -f" "$(pick_final "$root" lsblk-f.txt)"
+    md_embed "latest omarchy-mac-setup --status" "$(pick_final "$root" omarchy-mac-setup-status.txt)"
     echo "## 6. First desktop login — installed-system state"
     echo
     md_embed "smoke result" "$(pick_ev "$root" smoke-result.txt)"
@@ -588,25 +623,31 @@ write_share_md() {
     echo
     echo "Second graphical session is captured after an automatic reboot. Cleanup commands:"
     echo
-    md_embed "systemctl is-enabled omarchy-mac-setup.service" "$(pick_ev "$root" setup-service-enabled.txt)"
-    md_embed "test -e /etc/omarchy-mac-setup.conf" "$(pick_ev "$root" setup-conf-exists.txt)"
-    md_embed "test -e /etc/sudoers.d/01-omarchy-mac-setup" "$(pick_ev "$root" setup-sudoers-exists.txt)"
-    md_embed "journalctl -b -p warning" "$(pick_ev "$root" journalctl-b-warning.txt)"
-    md_embed "journalctl --user -b -p warning" "$(pick_ev "$root" journalctl-user-b-warning.txt)"
-    md_embed "LoadState=not-found units" "$(pick_ev "$root" not-found-units.txt)"
-    md_embed "ufw status" "$(pick_ev "$root" ufw-status.txt)"
-    md_embed "sshd is-enabled" "$(pick_ev "$root" sshd-enabled.txt)"
-    md_embed "passwd -S root" "$(pick_ev "$root" root-passwd-status.txt)"
+    md_embed "systemctl is-enabled omarchy-mac-setup.service" "$(pick_final "$root" setup-service-enabled.txt)"
+    md_embed "test -e /etc/omarchy-mac-setup.conf" "$(pick_final "$root" setup-conf-exists.txt)"
+    md_embed "test -e /etc/sudoers.d/01-omarchy-mac-setup" "$(pick_final "$root" setup-sudoers-exists.txt)"
+    md_embed "journalctl -b -p warning" "$(pick_final "$root" journalctl-b-warning.txt)"
+    md_embed "journalctl --user -b -p warning" "$(pick_final "$root" journalctl-user-b-warning.txt)"
+    md_embed "LoadState=not-found units" "$(pick_final "$root" not-found-units.txt)"
+    md_embed "ufw status" "$(pick_final "$root" ufw-status.txt)"
+    md_embed "sshd is-enabled" "$(pick_final "$root" sshd-enabled.txt)"
+    md_embed "passwd -S root" "$(pick_final "$root" root-passwd-status.txt)"
+    md_embed "journalctl --list-boots" "$(pick_final "$root" journalctl-list-boots.txt)"
     echo "## 8. Failure evidence"
     echo
-    md_embed "omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
-    md_embed "systemctl status omarchy-mac-setup.service" "$(pick_ev "$root" systemctl-setup.txt)"
-    md_embed "journalctl --list-boots" "$(pick_ev "$root" journalctl-list-boots.txt)"
-    md_embed "journalctl -b" "$(pick_ev "$root" journalctl-current-boot.txt)"
-    md_embed "findmnt" "$(pick_ev "$root" findmnt.txt)"
-    md_embed "tail omarchy-mac-setup.log" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
-    md_embed "tail omarchy-install.log" "$(pick_ev "$root" omarchy-install.log-tail.txt)"
-    md_embed "tail pacman.log" "$(pick_ev "$root" pacman.log-tail.txt)"
+    if find "$root" -type d \( -name '08-fail' -o -name 'fail-*' \) 2>/dev/null | grep -q .; then
+      md_embed "omarchy-mac-setup --status" "$(pick_ev "$root" omarchy-mac-setup-status.txt)"
+      md_embed "systemctl status omarchy-mac-setup.service" "$(pick_ev "$root" systemctl-setup.txt)"
+      md_embed "journalctl --list-boots" "$(pick_ev "$root" journalctl-list-boots.txt)"
+      md_embed "journalctl -b" "$(pick_ev "$root" journalctl-current-boot.txt)"
+      md_embed "findmnt" "$(pick_ev "$root" findmnt.txt)"
+      md_embed "tail omarchy-mac-setup.log" "$(pick_ev "$root" omarchy-mac-setup.log-tail.txt)"
+      md_embed "tail omarchy-install.log" "$(pick_ev "$root" omarchy-install.log-tail.txt)"
+      md_embed "tail pacman.log" "$(pick_ev "$root" pacman.log-tail.txt)"
+    else
+      echo "No failure snapshot. Install completed; see §4–§7 for post-install state."
+      echo
+    fi
     echo "## Notes"
     echo
     echo "- ARM-unavailable packages: installer default is No; warnings/skips are grepped from logs."
@@ -683,6 +724,11 @@ phase_start() {
     echo "omarchy-mac-setup not on PATH yet" >"$d/omarchy-mac-setup-status.txt"
   fi
   capture "$d/setup-conf.txt" -c 'cat /etc/omarchy-mac-setup.conf 2>/dev/null || echo missing'
+  if [[ -r /etc/omarchy-mac-setup.conf ]]; then
+    mkdir -p "$E2E_ROOT"
+    cp -a /etc/omarchy-mac-setup.conf "$E2E_ROOT/saved-setup.conf"
+    chmod 644 "$E2E_ROOT/saved-setup.conf" 2>/dev/null || true
+  fi
   capture "$d/systemctl-setup.txt" systemctl status omarchy-mac-setup.service --no-pager
   copy_tail /var/log/omarchy-mac-setup.log "$d/omarchy-mac-setup.log-tail.txt" 200
   capture "$d/findmnt-root.txt" findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS --mountpoint /
@@ -984,7 +1030,7 @@ save_e2e_conf() {
 install_hooks() {
   mkdir -p "$E2E_ROOT" /etc/systemd/system /etc/systemd/user \
     /etc/systemd/system/omarchy-mac-setup.service.d
-  chmod 755 "$E2E_ROOT"
+  chmod 1777 "$E2E_ROOT"
 
   cat >/etc/systemd/system/omarchy-mac-e2e-boot.service <<'EOF'
 [Unit]
@@ -1041,8 +1087,32 @@ After you sign into Omarchy, the copy-off folder is:
   ~/omarchy-mac-e2e
 EOF
 
+  cat >/etc/systemd/system/omarchy-mac-e2e-final.service <<'EOF'
+[Unit]
+Description=Omarchy Mac E2E final post-install snapshot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/omarchy-mac-e2e-capture final
+Nice=10
+EOF
+
+  cat >/etc/systemd/system/omarchy-mac-e2e-final.path <<'EOF'
+[Unit]
+Description=Watch for Omarchy Mac E2E final snapshot request
+
+[Path]
+PathExists=/var/lib/omarchy-mac-e2e/request-final
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   systemctl daemon-reload
   systemctl enable omarchy-mac-e2e-boot.service >/dev/null 2>&1 || true
+  systemctl enable omarchy-mac-e2e-final.path >/dev/null 2>&1 || true
+  systemctl start omarchy-mac-e2e-final.path >/dev/null 2>&1 || true
   systemctl --global enable omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
 }
 
@@ -1074,6 +1144,48 @@ phase_boot_snapshot() {
   if systemctl is-failed omarchy-mac-setup.service >/dev/null 2>&1; then
     phase_fail
   fi
+}
+
+phase_final() {
+  quiet_footer=1
+  if [[ "${EUID:-1}" -ne 0 ]]; then
+    echo "e2e-capture: final snapshot must run as root" >&2
+    return 1
+  fi
+  local user dest
+  user="$(owner_user)"
+  dest="$E2E_ROOT/bundle"
+  if [[ -n "$user" && -d "/home/$user" ]]; then
+    dest="/home/$user/omarchy-mac-e2e"
+  fi
+  mkdir -p "$dest/install" "$E2E_ROOT/final"
+  outdir="$E2E_ROOT/final"
+  mkdir -p "$outdir"
+  write_meta
+  phase_asahi
+  phase_start
+  phase_persistence
+  capture "$outdir/08-post/journalctl-list-boots.txt" journalctl --list-boots
+  capture "$outdir/08-post/findmnt.txt" findmnt
+  capture "$outdir/08-post/df-h-root-boot.txt" df -h / /boot
+  copy_tail /var/log/omarchy-install.log "$outdir/08-post/omarchy-install.log-tail.txt" 200
+  copy_tail /var/log/pacman.log "$outdir/08-post/pacman.log-tail.txt" 200
+  copy_tail /var/log/omarchy-mac-setup.log "$outdir/08-post/omarchy-mac-setup.log-tail.txt" 200
+  capture "$outdir/08-post/hostnamectl.txt" hostnamectl
+  if [[ -d "$E2E_ROOT" ]]; then
+    cp -a "$E2E_ROOT"/. "$dest/install/" 2>/dev/null || true
+  fi
+  if [[ -d "$outdir" ]]; then
+    mkdir -p "$dest/final"
+    cp -a "$outdir"/. "$dest/final/" 2>/dev/null || true
+  fi
+  write_share_md "$dest" "$dest/REPORT.md"
+  date -Is >"$dest/READY" 2>/dev/null || date >"$dest/READY"
+  if [[ -n "$user" ]]; then
+    chown -R "$user:$user" "$dest" 2>/dev/null || true
+  fi
+  rm -f "$E2E_ROOT/request-final"
+  echo "Final snapshot written to $dest/REPORT.md"
 }
 
 phase_first_login() {
@@ -1113,16 +1225,11 @@ EOF
     systemctl reboot || loginctl reboot || true
     return 0
   fi
-  date -Is >"$dest/READY" 2>/dev/null || date >"$dest/READY"
   systemctl --user disable --now omarchy-mac-e2e-first-login.service >/dev/null 2>&1 || true
-  echo
-  echo "========================================"
-  echo "E2E capture complete."
-  echo "Share this markdown file:"
-  echo
-  echo "  $dest/REPORT.md"
-  echo
-  echo "========================================"
+  mkdir -p "$E2E_ROOT"
+  : >"$E2E_ROOT/request-final"
+  echo "Graphical captures done. Requesting final root snapshot..."
+  echo "Share $dest/REPORT.md after it refreshes (a few seconds)."
 }
 
 phase_run() {
@@ -1203,6 +1310,7 @@ case "$phase" in
   run) phase_run ;;
   boot-snapshot) phase_boot_snapshot ;;
   first-login) phase_first_login ;;
+  final) phase_final ;;
 esac
 
 combine
